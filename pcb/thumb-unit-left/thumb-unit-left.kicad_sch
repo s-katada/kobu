@@ -3072,6 +3072,10 @@
 		(uuid "f8a3614e-499a-4ea3-acc8-160b96ab1542")
 	)
 	(no_connect
+		(at 85.09 60.96)
+		(uuid "1729fb77-882d-4313-8e63-20ab97545343")
+	)
+	(no_connect
 		(at 189.23 161.29)
 		(uuid "1ceb4754-0682-4bf0-816c-4d1d775ec267")
 	)
@@ -5695,7 +5699,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "mcu:xiao-ble-tht"
+		(property "Footprint" "mcu_roba:XIAO_nRF52840_wBAT_wNFC_1"
 			(at 73.66 71.12 0)
 			(effects
 				(font
@@ -6225,72 +6229,6 @@
 			(project ""
 				(path "/8578c350-a4e6-49ba-a463-553b48512071"
 					(reference "R1")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "power:GND")
-		(at 85.09 60.96 180)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(fields_autoplaced yes)
-		(uuid "b170e3e5-9026-43fb-9784-8c2761a1abba")
-		(property "Reference" "#PWR05"
-			(at 85.09 54.61 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Value" "GND"
-			(at 85.09 55.88 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-			)
-		)
-		(property "Footprint" ""
-			(at 85.09 60.96 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 85.09 60.96 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Power symbol creates a global label with name \"GND\" , ground"
-			(at 85.09 60.96 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "1"
-			(uuid "9c67f37e-4394-4d52-8ccd-f3ab1f20c6d8")
-		)
-		(instances
-			(project ""
-				(path "/8578c350-a4e6-49ba-a463-553b48512071"
-					(reference "#PWR05")
 					(unit 1)
 				)
 			)
