@@ -17,3 +17,18 @@ firmware/target/
 # ZMK local Docker build cache + UF2 output
 .zmk-build/
 build-output/
+
+# KiCad: auto-saves, lock files, fp cache, DRC/ERC reports
+**/_autosave-*
+**/~*.lck
+**/*-cache.lib
+**/drc-*.txt
+**/erc-*.txt
+pcb/**/drc-report.txt
+pcb/**/drc-final.txt
+pcb/**/drc-parity.txt
+pcb/**/erc-report.txt
+
+# KiCad: rolling backups (auto-generated, large binary churn)
+pcb/**/*-backups/
+pcb/**/production/backups/
