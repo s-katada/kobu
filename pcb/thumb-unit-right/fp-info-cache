@@ -1,4 +1,4 @@
-28187222827930724
+28189000311894893
 Audio_Module
 Reverb_BTDR-1H
 Digital Reverberation Unit, http://www.belton.co.kr/inc/downfile.php?seq=17&file=pdf (footprint from http://www.uk-electronic.de/PDF/BTDR-1.pdf)
@@ -111617,6 +111617,13 @@ xiao-smd
 mcu
 xiao-tht
 
+
+0
+18
+18
+mcu_roba
+XIAO_nRF52840_wBAT_wNFC_1
+https://gitlab.com/lpgalaxy/revxlp(xiao-ble-smd)
 
 0
 18
