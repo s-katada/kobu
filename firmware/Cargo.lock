@@ -1324,6 +1324,7 @@ dependencies = [
  "embassy-executor",
  "embassy-nrf",
  "embassy-time",
+ "embassy-usb-driver",
  "json",
  "nrf-mpsl",
  "nrf-sdc",
