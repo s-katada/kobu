@@ -14,10 +14,6 @@ firmware/target/
 .vscode/
 .idea/
 
-# ZMK local Docker build cache + UF2 output
-.zmk-build/
-build-output/
-
 # KiCad: auto-saves, lock files, fp cache, DRC/ERC reports
 **/_autosave-*
 **/~*.lck

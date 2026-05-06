@@ -1,5 +1,0 @@
-config SHIELD_KOBITOKEY_O_OYAYUBI_LEFT
-    def_bool $(shields_list_contains,kobitokey_o_oyayubi_left)
-
-config SHIELD_KOBITOKEY_O_OYAYUBI_RIGHT
-    def_bool $(shields_list_contains,kobitokey_o_oyayubi_right)
