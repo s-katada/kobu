@@ -52,6 +52,12 @@ rand = { version = "0.8.4", default-features = false }
 rand_core = { version = "0.6" }
 rand_chacha = { version = "0.3", default-features = false }
 
+# rmk pulls embassy-usb 0.5, which depends on embassy-usb-driver 0.2.x.
+# Pin to =0.2.0 to match upstream rmk-template (nrf52840_split) and
+# guard against accidental cargo update -p picking a newer driver
+# version that introduces a breaking change.
+embassy-usb-driver = "=0.2.0"
+
 [build-dependencies]
 xz2 = "0.1.7"
 json = "0.12"

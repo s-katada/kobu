@@ -49,7 +49,7 @@ keymap = [
         ["Q",    "W",    "E",    "R",    "T",         "Y",    "U",    "I",    "O",    "P"],
         ["A",    "S",    "D",    "F",    "G",         "H",    "J",    "K",    "L",    "Semicolon"],
         ["Z",    "X",    "C",    "V",    "B",         "N",    "M",    "Comma","Dot",  "Slash"],
-        ["LCtrl","LAlt", "MO(1)", "Space","No",        "Enter","MO(1)","RShift","RAlt","No"],
+        ["LCtrl","LAlt", "MO(2)", "Space","No",        "Enter","MO(1)","RShift","RAlt","No"],
     ],
     [
         ["Kc1",  "Kc2",  "Kc3",  "Kc4",  "Kc5",       "Kc6",  "Kc7",  "Kc8",  "Kc9",  "Kc0"],
