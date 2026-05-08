@@ -26,10 +26,20 @@
 #   USER_LED_G(P0_30)   -> boot indicator LED (common anode, LOW = on)
 # Diode anode pads connect to ROW nets and cathode pads go through the
 # switch to COL nets (verified from KiCad netlist on D1..D15). Conduction
-# is therefore ROW -> COL, so the matrix has to be scanned with rows as
-# outputs and cols as inputs. RMK calls this row2col = true. With the
-# default row2col = false the diodes are reverse-biased during scan and
-# no key can register.
+# is therefore ROW -> COL, so the matrix is scanned with rows as outputs
+# and cols as inputs. RMK calls this row2col = true.
+#
+# Column ordering differs between halves. On the left half COL0 is the
+# inner index (T column) and COL4 is the outer pinky (Q column); on the
+# right half COL0 is the inner index (Y column) and COL4 is the outer
+# pinky (P column). To get a unified 4x10 layout where keymap col 0 is
+# the leftmost pinky, the LEFT col_pins are declared in reverse so that
+# col_pins[0] = COL4 wire = P0.10, col_pins[4] = COL0 wire = P1.12.
+# RIGHT keeps the natural order (col_pins[0] = COL0 wire = inner index,
+# col_pins[4] = COL4 wire = outer pinky) plus col_offset = 5.
+# Consequently the row 3 phantom (no-switch) slots are (3, 0) and (3, 9)
+# (both pinky columns), and the 4 thumb keys per side land on cols 1..4
+# (left) / 5..8 (right).
 # ROW/COL nets are shared between main and thumb boards via J1.
 
 [keyboard]
@@ -46,18 +56,22 @@ rows = 4
 cols = 10
 layers = 4
 # Layout is a 38-key 4x10 split. Left half occupies cols 0..4, right half 5..9.
-# Row 0..2 are the 3x5 main-unit keys on each side; row 3 has 4 thumb keys
-# per side on cols 0..3 (left) / 5..8 (right). Cols 4 and 9 of row 3 have
-# no switch on the PCB, so the keymap entries there are "No" and never fire.
+# Row 0..2 are the 3x5 main-unit keys on each side. Row 3 has 4 thumb keys
+# per side on cols 1..4 (left) / 5..8 (right). The phantom (no-switch)
+# slots on row 3 are (3, 0) and (3, 9) — both are the outer pinky columns
+# where the PCB has no thumb switch. See the [split.*.matrix] notes for
+# why LEFT col_pins are reversed.
 keymap = [
     [
         ["Q",    "W",    "E",    "R",    "T",         "Y",    "U",    "I",    "O",    "P"],
         ["A",    "S",    "D",    "F",    "G",         "H",    "J",    "K",    "L",    "Semicolon"],
         ["Z",    "X",    "C",    "V",    "B",         "N",    "M",    "Comma","Dot",  "Slash"],
         # Thumb keys remapped to A..H so each physical thumb key types a
-        # distinct letter for diagnosis. Restore modifiers/Space/Enter once
-        # all 8 thumb switches are confirmed working.
-        ["A",    "B",    "C",     "D",    "No",        "E",    "F",    "G",    "H",   "No"],
+        # distinct letter for diagnosis. Phantom slots (3,0) (3,9) are the
+        # pinky columns with no PCB switch. Left thumb 1..4 (outer->inner)
+        # = A B C D, right thumb 5..8 (inner->outer) = E F G H. Restore
+        # modifiers/Space/Enter once all 8 thumb switches are confirmed.
+        ["No",   "A",    "B",    "C",    "D",         "E",    "F",    "G",    "H",   "No"],
     ],
     [
         ["Kc1",  "Kc2",  "Kc3",  "Kc4",  "Kc5",       "Kc6",  "Kc7",  "Kc8",  "Kc9",  "Kc0"],
@@ -94,7 +108,8 @@ col_offset = 0
 
 [split.central.matrix]
 row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
-col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
+# Reverse order: keymap col 0 = pinky must drive COL4 wire = P0.10.
+col_pins = ["P0_10", "P1_15", "P1_14", "P1_13", "P1_12"]
 row2col = true
 
 # Seeed XIAO nRF52840's onboard RGB user LED is common anode:
@@ -113,6 +128,8 @@ col_offset = 5
 
 [split.peripheral.matrix]
 row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
+# Natural order: keymap col 5 (= central col 0 + col_offset) = inner index
+# = COL0 wire = P1.12; keymap col 9 = pinky = COL4 wire = P0.10.
 col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
 row2col = true
 
