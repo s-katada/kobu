@@ -24,8 +24,13 @@
 #   NFC2(P0_10, pin 22) -> COL4  (back-side pad, NFC disabled in firmware)
 #   NFC1(P0_09, pin 21) -> NCS   (trackball chip-select, back-side pad)
 #   USER_LED_G(P0_30)   -> boot indicator LED (common anode, LOW = on)
-# Diode direction is col2row, so RMK scans columns as outputs and rows as
-# inputs. ROW/COL nets are shared between main and thumb boards via J1.
+# Diode anode pads connect to ROW nets and cathode pads go through the
+# switch to COL nets (verified from KiCad netlist on D1..D15). Conduction
+# is therefore ROW -> COL, so the matrix has to be scanned with rows as
+# outputs and cols as inputs. RMK calls this row2col = true. With the
+# default row2col = false the diodes are reverse-biased during scan and
+# no key can register.
+# ROW/COL nets are shared between main and thumb boards via J1.
 
 [keyboard]
 name = "kobitokey-o-oyayubi"
@@ -49,7 +54,10 @@ keymap = [
         ["Q",    "W",    "E",    "R",    "T",         "Y",    "U",    "I",    "O",    "P"],
         ["A",    "S",    "D",    "F",    "G",         "H",    "J",    "K",    "L",    "Semicolon"],
         ["Z",    "X",    "C",    "V",    "B",         "N",    "M",    "Comma","Dot",  "Slash"],
-        ["LCtrl","LAlt", "MO(2)", "Space","No",        "Enter","MO(1)","RShift","RAlt","No"],
+        # Thumb keys remapped to A..H so each physical thumb key types a
+        # distinct letter for diagnosis. Restore modifiers/Space/Enter once
+        # all 8 thumb switches are confirmed working.
+        ["A",    "B",    "C",     "D",    "No",        "E",    "F",    "G",    "H",   "No"],
     ],
     [
         ["Kc1",  "Kc2",  "Kc3",  "Kc4",  "Kc5",       "Kc6",  "Kc7",  "Kc8",  "Kc9",  "Kc0"],
@@ -87,6 +95,7 @@ col_offset = 0
 [split.central.matrix]
 row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
+row2col = true
 
 # Seeed XIAO nRF52840's onboard RGB user LED is common anode:
 # low_active + initial_state_active turns it on as soon as RMK initializes GPIO.
@@ -105,6 +114,7 @@ col_offset = 5
 [split.peripheral.matrix]
 row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
+row2col = true
 
 [[split.peripheral.output]]
 pin = "P0_30"
