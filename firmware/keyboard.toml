@@ -41,11 +41,15 @@
 #   the wrong cable since two MCU pins are clamped to power rails.
 #
 # Diode direction:
-#   D1..D15 in the KiCad netlist all have anode on the ROW net and
-#   cathode toward the switch (toward COL). With the correct FFC cable
-#   that means conduction is ROW -> COL, and the matrix needs to be
-#   scanned with rows as outputs and cols as inputs (row2col = true,
-#   set below on both [split.*.matrix] sections).
+#   D1..D15 in the KiCad netlist place the anode on the ROW net (which
+#   on paper would call for row2col = true). Empirically though, with
+#   the FFC cable verified reverse-mapped, a row2col = true build is
+#   completely dead while the col2row default lights at least some
+#   keys. That is consistent with the SOD-123 diodes being soldered
+#   180-deg from the silkscreen marker (cathode band on the anode pad).
+#   So we keep RMK at its col2row default (drive cols / read rows). If
+#   a future revision reflows the diodes the right way around, set
+#   row2col = true on both [split.*.matrix] sections.
 #
 # Column ordering differs between halves. On the left half COL0 is the
 # inner index (T column) and COL4 is the outer pinky (Q column); on the
@@ -128,7 +132,7 @@ col_offset = 0
 row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 # Reverse order: keymap col 0 = pinky drives COL4 wire = P0.10.
 col_pins = ["P0_10", "P1_15", "P1_14", "P1_13", "P1_12"]
-row2col = true
+# row2col = true  # set if a future board has diodes per schematic
 
 # Seeed XIAO nRF52840's onboard RGB user LED is common anode:
 # low_active + initial_state_active turns it on as soon as RMK initializes GPIO.
@@ -149,7 +153,7 @@ row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 # Natural order: keymap col 5 (= central col 0 + col_offset) = inner index
 # = COL0 wire = P1.12; keymap col 9 = pinky = COL4 wire = P0.10.
 col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
-row2col = true
+# row2col = true  # set if a future board has diodes per schematic
 
 [[split.peripheral.output]]
 pin = "P0_30"
