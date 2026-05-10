@@ -72,6 +72,10 @@ path = "src/central.rs"
 name = "peripheral"
 path = "src/peripheral.rs"
 
+[[bin]]
+name = "central_test"
+path = "src/central_test.rs"
+
 [profile.dev]
 codegen-units = 1
 debug = true
