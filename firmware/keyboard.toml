@@ -40,16 +40,28 @@
 #   contact" / "Type 2"). No firmware change can compensate cleanly for
 #   the wrong cable since two MCU pins are clamped to power rails.
 #
-# Diode direction:
-#   D1..D15 in the KiCad netlist place the anode on the ROW net (which
-#   on paper would call for row2col = true). Empirically though, with
-#   the FFC cable verified reverse-mapped, a row2col = true build is
-#   completely dead while the col2row default lights at least some
-#   keys. That is consistent with the SOD-123 diodes being soldered
-#   180-deg from the silkscreen marker (cathode band on the anode pad).
-#   So we keep RMK at its col2row default (drive cols / read rows). If
-#   a future revision reflows the diodes the right way around, set
-#   row2col = true on both [split.*.matrix] sections.
+# Diode direction (MIXED on the assembled boards we have!):
+#   The KiCad netlist places the anode on the ROW net for every diode
+#   on both main and thumb units. Empirically though:
+#     - row2col = true   → THUMB keys register, MAIN keys are dead
+#     - col2row default  → MAIN keys register, THUMB keys are dead
+#   This means the main-unit D1..D15 were soldered 180 deg from the
+#   silkscreen marker (anode physically on /COL), while the thumb-unit
+#   D1..D4 were soldered correctly (anode on /ROW). The two halves of
+#   the matrix therefore want opposite scan directions and a single
+#   RMK Matrix cannot serve both.
+#
+#   Workarounds:
+#     (a) hardware: reflow the 8 thumb diodes (4 per side) to match the
+#         reversed main orientation, then this col2row default works
+#         for the whole 38-key matrix. (Recommended — fewest reworks.)
+#     (b) firmware: replace the [#rmk_central] macro with a hand-rolled
+#         InputDevice using rmk::matrix::BidirectionalMatrix and a
+#         per-key scan_map, so each key picks its own drive/read
+#         direction. (~200 lines of Rust.)
+#
+#   Until either workaround is applied, we keep RMK at its col2row
+#   default so the main keyboard area at least registers normally.
 #
 # Column ordering: both halves currently use natural col_pins order,
 # matching the older build that demonstrated a working Space on SW5.
