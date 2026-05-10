@@ -183,11 +183,12 @@ async fn main(spawner: Spawner) {
     };
     let vial_config = VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(0, 0)]);
     let ble_battery_config = BleBatteryConfig::new(None, false, None, false);
-    let storage_config = StorageConfig {
-        start_addr: 0,
-        num_sectors: 6,
-        ..Default::default()
-    };
+    // Match the macro builds exactly: start_addr=0 + num_sectors=2 (default).
+    // num_sectors=6 reached into the Adafruit bootloader region from the top
+    // of the FLASH window in memory.x and may have been hanging the runtime
+    // storage init (which is awaited before run_rmk and therefore before
+    // USB HID enumeration).
+    let storage_config = StorageConfig::default();
     let rmk_config = RmkConfig {
         device_config: keyboard_device_config,
         vial_config,

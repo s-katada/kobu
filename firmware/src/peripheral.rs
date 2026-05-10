@@ -129,11 +129,7 @@ async fn main(spawner: Spawner) {
         Flex::new(p.P0_10), // local col 4 → /COL4 wire (P pinky)
     ];
 
-    let storage_config = StorageConfig {
-        start_addr: 0,
-        num_sectors: 2,
-        ..Default::default()
-    };
+    let storage_config = StorageConfig::default();
     let flash = Flash::take(mpsl, p.NVMC);
     let mut storage = new_storage_for_split_peripheral(flash, storage_config).await;
 
