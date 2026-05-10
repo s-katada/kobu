@@ -24,17 +24,28 @@
 #   NFC2(P0_10, pin 22) -> COL4  (back-side pad, NFC disabled in firmware)
 #   NFC1(P0_09, pin 21) -> NCS   (trackball chip-select, back-side pad)
 #   USER_LED_G(P0_30)   -> boot indicator LED (common anode, LOW = on)
+# FFC cable type (CRITICAL):
+#   The thumb-unit J1 pinout is "natural order" (1=+3V3, 2=GND, 3..5=ROW0..2,
+#   6..10=COL0..4). The main-unit J1 pinout is the EXACT REVERSE
+#   (1=COL4..10=+3V3). For these to mate as designed, the FFC cable must
+#   reverse pin mapping (pin 1 of one connector goes to pin 10 of the
+#   other). With the wrong cable (straight mapping pin 1 ↔ pin 1) the
+#   matrix scans 90° rotated AND P0.10 / P1.15 get shorted to +3V3 / GND
+#   respectively, killing two columns and leaving the chip vulnerable.
+#
+#   Multimeter check (power OFF):
+#     main J1 pin 1 (COL4) ↔ thumb J1 pin 10 (COL4) → MUST beep
+#     main J1 pin 1 (COL4) ↔ thumb J1 pin 1  (+3V3) → must NOT beep
+#   If the second test beeps, swap to a reverse-mapping FFC ("opposite-
+#   contact" / "Type 2"). No firmware change can compensate cleanly for
+#   the wrong cable since two MCU pins are clamped to power rails.
+#
 # Diode direction:
-#   The KiCad schematic and netlist place the diode anode on the ROW net
-#   and the cathode on the switch (toward COL). Following that strictly
-#   would require row2col = true. Empirically, however, the boards we
-#   have on hand behave as col2row (anode-on-COL): with row2col = true
-#   the entire matrix is dead, while the RMK default (col2row) at least
-#   registers some keys. This matches the sister project KobitoKey_QWERTY,
-#   which is wired the same physical way and uses col2row in ZMK. So we
-#   leave row2col unset (= col2row = drive cols, read rows). If you ever
-#   build with diodes flipped to match the schematic, set row2col = true
-#   on both [split.*.matrix] sections.
+#   D1..D15 in the KiCad netlist all have anode on the ROW net and
+#   cathode toward the switch (toward COL). With the correct FFC cable
+#   that means conduction is ROW -> COL, and the matrix needs to be
+#   scanned with rows as outputs and cols as inputs (row2col = true,
+#   set below on both [split.*.matrix] sections).
 #
 # Column ordering differs between halves. On the left half COL0 is the
 # inner index (T column) and COL4 is the outer pinky (Q column); on the
@@ -117,7 +128,7 @@ col_offset = 0
 row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 # Reverse order: keymap col 0 = pinky drives COL4 wire = P0.10.
 col_pins = ["P0_10", "P1_15", "P1_14", "P1_13", "P1_12"]
-# row2col = true  # uncomment if diodes are populated to match schematic
+row2col = true
 
 # Seeed XIAO nRF52840's onboard RGB user LED is common anode:
 # low_active + initial_state_active turns it on as soon as RMK initializes GPIO.
@@ -138,7 +149,7 @@ row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 # Natural order: keymap col 5 (= central col 0 + col_offset) = inner index
 # = COL0 wire = P1.12; keymap col 9 = pinky = COL4 wire = P0.10.
 col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
-# row2col = true  # uncomment if diodes are populated to match schematic
+row2col = true
 
 [[split.peripheral.output]]
 pin = "P0_30"
