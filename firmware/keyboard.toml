@@ -24,10 +24,17 @@
 #   NFC2(P0_10, pin 22) -> COL4  (back-side pad, NFC disabled in firmware)
 #   NFC1(P0_09, pin 21) -> NCS   (trackball chip-select, back-side pad)
 #   USER_LED_G(P0_30)   -> boot indicator LED (common anode, LOW = on)
-# Diode anode pads connect to ROW nets and cathode pads go through the
-# switch to COL nets (verified from KiCad netlist on D1..D15). Conduction
-# is therefore ROW -> COL, so the matrix is scanned with rows as outputs
-# and cols as inputs. RMK calls this row2col = true.
+# Diode direction:
+#   The KiCad schematic and netlist place the diode anode on the ROW net
+#   and the cathode on the switch (toward COL). Following that strictly
+#   would require row2col = true. Empirically, however, the boards we
+#   have on hand behave as col2row (anode-on-COL): with row2col = true
+#   the entire matrix is dead, while the RMK default (col2row) at least
+#   registers some keys. This matches the sister project KobitoKey_QWERTY,
+#   which is wired the same physical way and uses col2row in ZMK. So we
+#   leave row2col unset (= col2row = drive cols, read rows). If you ever
+#   build with diodes flipped to match the schematic, set row2col = true
+#   on both [split.*.matrix] sections.
 #
 # Column ordering differs between halves. On the left half COL0 is the
 # inner index (T column) and COL4 is the outer pinky (Q column); on the
@@ -108,9 +115,9 @@ col_offset = 0
 
 [split.central.matrix]
 row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
-# Reverse order: keymap col 0 = pinky must drive COL4 wire = P0.10.
+# Reverse order: keymap col 0 = pinky drives COL4 wire = P0.10.
 col_pins = ["P0_10", "P1_15", "P1_14", "P1_13", "P1_12"]
-row2col = true
+# row2col = true  # uncomment if diodes are populated to match schematic
 
 # Seeed XIAO nRF52840's onboard RGB user LED is common anode:
 # low_active + initial_state_active turns it on as soon as RMK initializes GPIO.
@@ -131,7 +138,7 @@ row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 # Natural order: keymap col 5 (= central col 0 + col_offset) = inner index
 # = COL0 wire = P1.12; keymap col 9 = pinky = COL4 wire = P0.10.
 col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
-row2col = true
+# row2col = true  # uncomment if diodes are populated to match schematic
 
 [[split.peripheral.output]]
 pin = "P0_30"
