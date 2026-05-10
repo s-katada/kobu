@@ -47,7 +47,6 @@ defmt = "1.0"
 defmt-rtt = "1.0"
 panic-probe = { version = "1.0", features = ["print-defmt"] }
 static_cell = "2"
-heapless = { version = "0.8", default-features = false }
 
 rand = { version = "0.8.4", default-features = false }
 rand_core = { version = "0.6" }
@@ -71,10 +70,6 @@ path = "src/central.rs"
 [[bin]]
 name = "peripheral"
 path = "src/peripheral.rs"
-
-[[bin]]
-name = "central_test"
-path = "src/central_test.rs"
 
 [profile.dev]
 codegen-units = 1

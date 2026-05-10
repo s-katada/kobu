@@ -145,7 +145,7 @@ row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 # the COL3 / COL4 hardware issues. Flip back to a reversed list once the
 # matrix is reliable end-to-end.
 col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
-# row2col = true  # set if a future board has diodes per schematic
+# row2col = true  # set to scan in row2col direction (works for thumb diodes)
 
 # Seeed XIAO nRF52840's onboard RGB user LED is common anode:
 # low_active + initial_state_active turns it on as soon as RMK initializes GPIO.
@@ -166,7 +166,7 @@ row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 # Natural order: keymap col 5 (= central col 0 + col_offset) = inner index
 # = COL0 wire = P1.12; keymap col 9 = pinky = COL4 wire = P0.10.
 col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
-# row2col = true  # set if a future board has diodes per schematic
+# row2col = true  # set to scan in row2col direction (works for thumb diodes)
 
 [[split.peripheral.output]]
 pin = "P0_30"
