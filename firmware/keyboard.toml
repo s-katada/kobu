@@ -51,17 +51,14 @@
 #   a future revision reflows the diodes the right way around, set
 #   row2col = true on both [split.*.matrix] sections.
 #
-# Column ordering differs between halves. On the left half COL0 is the
-# inner index (T column) and COL4 is the outer pinky (Q column); on the
-# right half COL0 is the inner index (Y column) and COL4 is the outer
-# pinky (P column). To get a unified 4x10 layout where keymap col 0 is
-# the leftmost pinky, the LEFT col_pins are declared in reverse so that
-# col_pins[0] = COL4 wire = P0.10, col_pins[4] = COL0 wire = P1.12.
-# RIGHT keeps the natural order (col_pins[0] = COL0 wire = inner index,
-# col_pins[4] = COL4 wire = outer pinky) plus col_offset = 5.
-# Consequently the row 3 phantom (no-switch) slots are (3, 0) and (3, 9)
-# (both pinky columns), and the 4 thumb keys per side land on cols 1..4
-# (left) / 5..8 (right).
+# Column ordering: both halves currently use natural col_pins order,
+# matching the older build that demonstrated a working Space on SW5.
+# That means keymap (3, 0) drives /COL0 = P1.12 = SW2 (inner thumb)
+# and (3, 3) drives /COL3 = P1.15 = SW5 (outer thumb). Phantom slots
+# (no PCB switch on /COL4 row 3) sit at (3, 4) and (3, 9). The main
+# letter rows therefore land mirrored on the unified 4x10 layout, but
+# that is fine while we still need physical key registration to be
+# easy to verify per column. See the matrix comments below.
 # ROW/COL nets are shared between main and thumb boards via J1.
 
 [keyboard]
@@ -79,21 +76,20 @@ cols = 10
 layers = 4
 # Layout is a 38-key 4x10 split. Left half occupies cols 0..4, right half 5..9.
 # Row 0..2 are the 3x5 main-unit keys on each side. Row 3 has 4 thumb keys
-# per side on cols 1..4 (left) / 5..8 (right). The phantom (no-switch)
-# slots on row 3 are (3, 0) and (3, 9) — both are the outer pinky columns
-# where the PCB has no thumb switch. See the [split.*.matrix] notes for
-# why LEFT col_pins are reversed.
+# per side on cols 0..3 (left) / 5..8 (right). The phantom (no-switch)
+# slots on row 3 are (3, 4) and (3, 9) — those are the /COL4 pinky-row
+# positions where the PCB has no thumb switch.
 keymap = [
     [
         ["Q",    "W",    "E",    "R",    "T",         "Y",    "U",    "I",    "O",    "P"],
         ["A",    "S",    "D",    "F",    "G",         "H",    "J",    "K",    "L",    "Semicolon"],
         ["Z",    "X",    "C",    "V",    "B",         "N",    "M",    "Comma","Dot",  "Slash"],
-        # Thumb keys remapped to A..H so each physical thumb key types a
-        # distinct letter for diagnosis. Phantom slots (3,0) (3,9) are the
-        # pinky columns with no PCB switch. Left thumb 1..4 (outer->inner)
-        # = A B C D, right thumb 5..8 (inner->outer) = E F G H. Restore
-        # modifiers/Space/Enter once all 8 thumb switches are confirmed.
-        ["No",   "A",    "B",    "C",    "D",         "E",    "F",    "G",    "H",   "No"],
+        # Thumb diagnostic keymap. With LEFT col_pins back in natural
+        # order, keymap (3, 0..3) drive /COL0..3 wires (= SW2..SW5 on
+        # the thumb-unit), and (3, 4) maps to the empty /COL4 slot.
+        # Pressing inner thumb (SW2) → A; outer thumb (SW5) → D.
+        # Right half stays natural (SW2..SW5 → E..H, (3, 9) phantom).
+        ["A",    "B",    "C",    "D",    "No",        "E",    "F",    "G",    "H",   "No"],
     ],
     [
         ["Kc1",  "Kc2",  "Kc3",  "Kc4",  "Kc5",       "Kc6",  "Kc7",  "Kc8",  "Kc9",  "Kc0"],
@@ -130,8 +126,13 @@ col_offset = 0
 
 [split.central.matrix]
 row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
-# Reverse order: keymap col 0 = pinky drives COL4 wire = P0.10.
-col_pins = ["P0_10", "P1_15", "P1_14", "P1_13", "P1_12"]
+# Natural order, matching the old "Space worked" build. With this layout
+# keymap col 0 = inner T column (= /COL0 = P1.12), keymap col 4 = outer
+# pinky Q column (= /COL4 = P0.10). Main-row letters land mirrored on
+# the unified 4x10 matrix; that is acceptable while we are still chasing
+# the COL3 / COL4 hardware issues. Flip back to a reversed list once the
+# matrix is reliable end-to-end.
+col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
 # row2col = true  # set if a future board has diodes per schematic
 
 # Seeed XIAO nRF52840's onboard RGB user LED is common anode:
