@@ -1,23 +1,25 @@
 //! Central (LEFT half) firmware.
 //!
-//! Hand-rolled because we cannot use `#[rmk_central]`: the assembled
-//! boards have main-unit diodes flipped (anode-on-/COL) while thumb-unit
-//! diodes are correct (anode-on-/ROW), and a single RMK `Matrix` only
-//! scans in one direction. We use `BidirectionalMatrix` with a per-key
-//! scan map (see `scan_map.rs`) so each key drives the side that holds
-//! its diode anode.
+//! The kobitokey-o-oyayubi assembled boards have main-unit diodes
+//! flipped (anode-on-/COL) while thumb-unit diodes are correct
+//! (anode-on-/ROW). A regular RMK `Matrix` only scans in one direction,
+//! so it can serve only half the keymap. We therefore replace the
+//! `#[rmk_central]` macro with a hand-rolled main and a custom
+//! `MixedDiodeMatrix` (see `mixed_matrix.rs`) that runs two clean scan
+//! passes per cycle: col2row for the main 15 keys, then row2col for the
+//! 4 thumb keys.
 
 #![no_std]
 #![no_main]
 
 mod keymap;
-mod scan_map;
+mod mixed_matrix;
 mod vial;
 
 use defmt::{info, unwrap};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
-use embassy_nrf::gpio::{Flex, Level, Output, OutputDrive, Pull};
+use embassy_nrf::gpio::{Flex, Level, Output, OutputDrive};
 use embassy_nrf::mode::Async;
 use embassy_nrf::peripherals::{RNG, USBD};
 use embassy_nrf::usb::Driver;
@@ -34,19 +36,17 @@ use rmk::channel::EVENT_CHANNEL;
 use rmk::config::{
     BehaviorConfig, BleBatteryConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig,
 };
-use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::futures::future::{join, join4};
 use rmk::input_device::Runnable;
 use rmk::keyboard::Keyboard;
 use rmk::matrix::OffsetMatrixWrapper;
-use rmk::matrix::bidirectional_matrix::BidirectionalMatrix;
 use rmk::split::ble::central::{read_peripheral_addresses, scan_peripherals};
 use rmk::split::central::run_peripheral_manager;
 use rmk::{HostResources, initialize_keymap_and_storage, run_devices, run_rmk};
 use static_cell::StaticCell;
 
 use crate::keymap::{COL, NUM_LAYER, ROW};
-use crate::scan_map::{COL_LOCAL, PIN_NUM, ROW_LOCAL, left_scan_map};
+use crate::mixed_matrix::{COL_LOCAL, MixedDiodeMatrix, PIN_NUM, ROW_LOCAL, ThumbPhantom};
 use crate::vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 
 bind_interrupts!(struct Irqs {
@@ -100,19 +100,17 @@ fn ble_addr() -> [u8; 6] {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    info!("Hello kobitokey-o-oyayubi central (BidirectionalMatrix)!");
+    info!("Hello kobitokey-o-oyayubi central (MixedDiodeMatrix)!");
 
-    // nRF52840 init with DC/DC enabled (matches rmk-template default).
     let mut nrf_config = embassy_nrf::config::Config::default();
     nrf_config.dcdc.reg0_voltage = Some(embassy_nrf::config::Reg0Voltage::_3V3);
     nrf_config.dcdc.reg0 = true;
     nrf_config.dcdc.reg1 = true;
     let p = embassy_nrf::init(nrf_config);
 
-    // Light the XIAO user LED (common-anode, LOW = on) as a boot indicator.
+    // Boot LED (XIAO common-anode user LED, LOW = on).
     let _boot_led = Output::new(p.P0_30, Level::Low, OutputDrive::Standard);
 
-    // BLE controller setup
     let mpsl_p = mpsl::Peripherals::new(p.RTC0, p.TIMER0, p.TEMP, p.PPI_CH19, p.PPI_CH30, p.PPI_CH31);
     let lfclk_cfg = mpsl::raw::mpsl_clock_lfclk_cfg_t {
         source: mpsl::raw::MPSL_CLOCK_LF_SRC_RC as u8,
@@ -141,39 +139,25 @@ async fn main(spawner: Spawner) {
     let mut host_resources = HostResources::new();
     let stack = build_ble_stack(sdc, ble_addr(), &mut rng_gen, &mut host_resources).await;
 
-    // USB driver
     let driver = Driver::new(p.USBD, Irqs, HardwareVbusDetect::new(Irqs));
-
-    // Flash for keymap storage
     let flash = Flash::take(mpsl, p.NVMC);
 
-    // Build the 9-pin Flex array.  The pin order is documented in `scan_map.rs`:
-    // [ROW0, ROW1, ROW2, ROW3, /COL4, /COL3, /COL2, /COL1, /COL0]
-    // i.e. the col entries are in reverse net order so keymap col 0 = pinky.
-    //
-    // CRITICAL: Flex::new leaves the pin in DISCONNECTED mode (no pull,
-    // no drive). The BidirectionalMatrix scan loop only flips a pin to
-    // input mode after using it as output once. Pins that are *only ever*
-    // in_pin (in our scan_map: ROW0..ROW2 for main keys, COL pins for
-    // thumb keys) would stay in disconnected mode forever and is_high()
-    // would read garbage. So we explicitly set every pin as a pull-down
-    // input up front.
-    let mut pins: [Flex<'static>; PIN_NUM] = [
+    // 9-pin Flex array for the LEFT half. Order:
+    //   pins[0..3] = ROW0..ROW3
+    //   pins[4..8] = COL pins ordered so local col 0 = leftmost (pinky)
+    //                column on the user's view = /COL4 wire = P0.10.
+    let pins: [Flex<'static>; PIN_NUM] = [
         Flex::new(p.P0_29), // ROW0
         Flex::new(p.P0_04), // ROW1
         Flex::new(p.P0_05), // ROW2
-        Flex::new(p.P1_11), // ROW3 (thumb)
-        Flex::new(p.P0_10), // /COL4 wire (P pinky col)
-        Flex::new(p.P1_15), // /COL3 wire
-        Flex::new(p.P1_14), // /COL2 wire
-        Flex::new(p.P1_13), // /COL1 wire
-        Flex::new(p.P1_12), // /COL0 wire (T inner-index col)
+        Flex::new(p.P1_11), // ROW3 (thumb-only)
+        Flex::new(p.P0_10), // local col 0 → /COL4 wire (P pinky)
+        Flex::new(p.P1_15), // local col 1 → /COL3 wire (W)
+        Flex::new(p.P1_14), // local col 2 → /COL2 wire (E)
+        Flex::new(p.P1_13), // local col 3 → /COL1 wire (R)
+        Flex::new(p.P1_12), // local col 4 → /COL0 wire (T inner-index)
     ];
-    for pin in pins.iter_mut() {
-        pin.set_as_input(Pull::Down);
-    }
 
-    // Keyboard / vial / storage configuration
     let keyboard_device_config = DeviceConfig {
         vid: 0x4b4f,
         pid: 0x4259,
@@ -184,8 +168,8 @@ async fn main(spawner: Spawner) {
     let vial_config = VialConfig::new(VIAL_KEYBOARD_ID, VIAL_KEYBOARD_DEF, &[(0, 0)]);
     let ble_battery_config = BleBatteryConfig::new(None, false, None, false);
     let storage_config = StorageConfig {
-        start_addr: 0,    // 0 → use last `num_sectors` sectors
-        num_sectors: 6,   // 24 KiB of storage room
+        start_addr: 0,
+        num_sectors: 6,
         ..Default::default()
     };
     let rmk_config = RmkConfig {
@@ -195,7 +179,6 @@ async fn main(spawner: Spawner) {
         storage_config,
     };
 
-    // Initialize keymap + storage
     let mut default_keymap = keymap::get_default_keymap();
     let mut behavior_config = BehaviorConfig::default();
     let mut positional_config = PositionalConfig::default();
@@ -208,15 +191,11 @@ async fn main(spawner: Spawner) {
     )
     .await;
 
-    // Build the BidirectionalMatrix wrapped in OffsetMatrixWrapper so its
-    // (row, col) events go straight into the unified 4×10 keymap.
-    let debouncer = DefaultDebouncer::<ROW_LOCAL, COL_LOCAL>::new();
-    let mut matrix = OffsetMatrixWrapper::<ROW_LOCAL, COL_LOCAL, _, 0, 0>(
-        BidirectionalMatrix::<_, _, PIN_NUM, ROW_LOCAL, COL_LOCAL>::new(pins, debouncer, left_scan_map()),
-    );
+    // Local matrix: 4×5 with phantom at (3, 0) for the left half. The
+    // central is at unified col 0..4 so OffsetMatrixWrapper uses 0/0.
+    let mut matrix = OffsetMatrixWrapper::<ROW_LOCAL, COL_LOCAL, _, 0, 0>(MixedDiodeMatrix::new(pins, ThumbPhantom::Col0));
     let mut keyboard = Keyboard::new(&keymap);
 
-    // Read peripheral BLE addresses from storage (split BLE pairing).
     let peripheral_addrs = read_peripheral_addresses::<1, _, ROW, COL, NUM_LAYER, 0>(&mut storage).await;
 
     info!("kobitokey-o-oyayubi central up — entering run loop");
@@ -232,4 +211,3 @@ async fn main(spawner: Spawner) {
     )
     .await;
 }
-

@@ -1,22 +1,18 @@
 //! Peripheral (RIGHT half) firmware.
 //!
-//! Same mixed-diode situation as central: BidirectionalMatrix lets the
-//! main keys (anode-on-/COL) and thumb keys (anode-on-/ROW) coexist on
-//! one physical pin set.
+//! Same mixed-diode situation as central. See `mixed_matrix.rs`.
 
 #![no_std]
 #![no_main]
 
-mod keymap;
-mod scan_map;
+mod mixed_matrix;
 
 use defmt::{info, unwrap};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
-use embassy_nrf::gpio::{Flex, Level, Output, OutputDrive, Pull};
+use embassy_nrf::gpio::{Flex, Level, Output, OutputDrive};
 use embassy_nrf::mode::Async;
-use embassy_nrf::peripherals::RNG;
-use embassy_nrf::peripherals::USBD;
+use embassy_nrf::peripherals::{RNG, USBD};
 use embassy_nrf::{bind_interrupts, rng, usb};
 use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
@@ -27,15 +23,13 @@ use rand_core::SeedableRng;
 use rmk::ble::build_ble_stack;
 use rmk::channel::EVENT_CHANNEL;
 use rmk::config::StorageConfig;
-use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::futures::future::join;
-use rmk::matrix::bidirectional_matrix::BidirectionalMatrix;
 use rmk::split::peripheral::run_rmk_split_peripheral;
 use rmk::storage::new_storage_for_split_peripheral;
 use rmk::{HostResources, run_devices};
 use static_cell::StaticCell;
 
-use crate::scan_map::{COL_LOCAL, PIN_NUM, ROW_LOCAL, right_scan_map};
+use crate::mixed_matrix::{MixedDiodeMatrix, PIN_NUM, ThumbPhantom};
 
 bind_interrupts!(struct Irqs {
     USBD => usb::InterruptHandler<USBD>;
@@ -83,7 +77,7 @@ fn ble_addr() -> [u8; 6] {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    info!("Hello kobitokey-o-oyayubi peripheral (BidirectionalMatrix)!");
+    info!("Hello kobitokey-o-oyayubi peripheral (MixedDiodeMatrix)!");
 
     let mut nrf_config = embassy_nrf::config::Config::default();
     nrf_config.dcdc.reg0_voltage = Some(embassy_nrf::config::Reg0Voltage::_3V3);
@@ -91,7 +85,6 @@ async fn main(spawner: Spawner) {
     nrf_config.dcdc.reg1 = true;
     let p = embassy_nrf::init(nrf_config);
 
-    // Boot LED indicator (common-anode → LOW = on).
     let _boot_led = Output::new(p.P0_30, Level::Low, OutputDrive::Standard);
 
     let mpsl_p = mpsl::Peripherals::new(p.RTC0, p.TIMER0, p.TEMP, p.PPI_CH19, p.PPI_CH30, p.PPI_CH31);
@@ -122,30 +115,20 @@ async fn main(spawner: Spawner) {
     let mut resources = HostResources::new();
     let stack = build_ble_stack(sdc, ble_addr(), &mut rng_generator, &mut resources).await;
 
-    // Pin order matches keymap col indexing for the right half:
-    //   col 0 (= unified col 5, inner index Y) → /COL0 wire (P1_12)
-    //   col 4 (= unified col 9, outer pinky P) → /COL4 wire (P0_10)
-    //
-    // See central.rs for why we must initialize every pin as a pull-down
-    // input before handing them to BidirectionalMatrix.
-    let mut pins: [Flex<'static>; PIN_NUM] = [
+    // Right-half pin order: local col 0 = leftmost (= inner index Y) =
+    // /COL0 wire = P1_12. local col 4 = pinky P = /COL4 wire = P0_10.
+    let pins: [Flex<'static>; PIN_NUM] = [
         Flex::new(p.P0_29), // ROW0
         Flex::new(p.P0_04), // ROW1
         Flex::new(p.P0_05), // ROW2
-        Flex::new(p.P1_11), // ROW3 (thumb)
-        Flex::new(p.P1_12), // /COL0 wire (Y inner-index col)
-        Flex::new(p.P1_13), // /COL1 wire
-        Flex::new(p.P1_14), // /COL2 wire
-        Flex::new(p.P1_15), // /COL3 wire
-        Flex::new(p.P0_10), // /COL4 wire (P pinky col)
+        Flex::new(p.P1_11), // ROW3 (thumb-only)
+        Flex::new(p.P1_12), // local col 0 → /COL0 wire (Y inner-index)
+        Flex::new(p.P1_13), // local col 1 → /COL1 wire (U)
+        Flex::new(p.P1_14), // local col 2 → /COL2 wire (I)
+        Flex::new(p.P1_15), // local col 3 → /COL3 wire (O)
+        Flex::new(p.P0_10), // local col 4 → /COL4 wire (P pinky)
     ];
-    for pin in pins.iter_mut() {
-        pin.set_as_input(Pull::Down);
-    }
 
-    // Storage for the peripheral half (small reservation; nothing
-    // user-meaningful is persisted on this side, but RMK requires a
-    // backing store for split BLE bonds).
     let storage_config = StorageConfig {
         start_addr: 0,
         num_sectors: 2,
@@ -154,8 +137,8 @@ async fn main(spawner: Spawner) {
     let flash = Flash::take(mpsl, p.NVMC);
     let mut storage = new_storage_for_split_peripheral(flash, storage_config).await;
 
-    let debouncer = DefaultDebouncer::<ROW_LOCAL, COL_LOCAL>::new();
-    let mut matrix = BidirectionalMatrix::<_, _, PIN_NUM, ROW_LOCAL, COL_LOCAL>::new(pins, debouncer, right_scan_map());
+    // Phantom on the right half lives at local col 4 (the pinky column).
+    let mut matrix = MixedDiodeMatrix::new(pins, ThumbPhantom::Col4);
 
     info!("kobitokey-o-oyayubi peripheral up — entering run loop");
 
