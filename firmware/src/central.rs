@@ -35,7 +35,7 @@ use rmk::config::{
     BehaviorConfig, BleBatteryConfig, DeviceConfig, PositionalConfig, RmkConfig, StorageConfig, VialConfig,
 };
 use rmk::debounce::default_debouncer::DefaultDebouncer;
-use rmk::futures::future::join4;
+use rmk::futures::future::{join, join4};
 use rmk::input_device::Runnable;
 use rmk::keyboard::Keyboard;
 use rmk::matrix::OffsetMatrixWrapper;
@@ -210,16 +210,14 @@ async fn main(spawner: Spawner) {
 
     info!("kobitokey-o-oyayubi central up — entering run loop");
 
-    join4(
-        run_devices!((matrix) => EVENT_CHANNEL),
-        keyboard.run(),
+    join(
         join4(
+            run_devices!((matrix) => EVENT_CHANNEL),
+            keyboard.run(),
             run_peripheral_manager::<ROW_LOCAL, COL_LOCAL, 0, 5, _>(0, &peripheral_addrs, &stack),
             run_rmk(&keymap, driver, &stack, &mut storage, rmk_config),
-            scan_peripherals(&stack, &peripheral_addrs),
-            core::future::pending::<()>(),
         ),
-        core::future::pending::<()>(),
+        scan_peripherals(&stack, &peripheral_addrs),
     )
     .await;
 }
