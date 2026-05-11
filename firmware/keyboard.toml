@@ -88,20 +88,21 @@ cols = 10
 layers = 4
 # Layout is a 38-key 4x10 split. Left half occupies cols 0..4, right half 5..9.
 # Row 0..2 are the 3x5 main-unit keys on each side. Row 3 has 4 thumb keys
-# per side on cols 0..3 (left) / 5..8 (right). The phantom (no-switch)
-# slots on row 3 are (3, 4) and (3, 9) — those are the /COL4 pinky-row
-# positions where the PCB has no thumb switch.
+# per side on cols 1..4 (left) / 5..8 (right). The phantom (no-switch)
+# slots on row 3 are (3, 0) and (3, 9) — those are the outer-pinky
+# columns (/COL4 wire) where the PCB has no thumb switch.
+# LEFT col_pins are reversed so keymap col 0 = outer pinky (Q column);
+# RIGHT col_pins are natural (col 5 = inner-index Y column).
 keymap = [
     [
         ["Q",    "W",    "E",    "R",    "T",         "Y",    "U",    "I",    "O",    "P"],
         ["A",    "S",    "D",    "F",    "G",         "H",    "J",    "K",    "L",    "Semicolon"],
         ["Z",    "X",    "C",    "V",    "B",         "N",    "M",    "Comma","Dot",  "Slash"],
-        # Thumb diagnostic keymap. With LEFT col_pins back in natural
-        # order, keymap (3, 0..3) drive /COL0..3 wires (= SW2..SW5 on
-        # the thumb-unit), and (3, 4) maps to the empty /COL4 slot.
-        # Pressing inner thumb (SW2) → A; outer thumb (SW5) → D.
-        # Right half stays natural (SW2..SW5 → E..H, (3, 9) phantom).
-        ["A",    "B",    "C",    "D",    "No",        "E",    "F",    "G",    "H",   "No"],
+        # Thumb diagnostic keymap. With LEFT col_pins reversed, keymap
+        # col 0 = outer pinky position (no thumb switch), cols 1..4 =
+        # SW5..SW2 (outer thumb → inner thumb). Going left-to-right
+        # across both halves the thumb keys read A B C D | E F G H.
+        ["No",   "A",    "B",    "C",    "D",         "E",    "F",    "G",    "H",   "No"],
     ],
     [
         ["Kc1",  "Kc2",  "Kc3",  "Kc4",  "Kc5",       "Kc6",  "Kc7",  "Kc8",  "Kc9",  "Kc0"],
@@ -138,13 +139,12 @@ col_offset = 0
 
 [split.central.matrix]
 row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
-# Natural order, matching the old "Space worked" build. With this layout
-# keymap col 0 = inner T column (= /COL0 = P1.12), keymap col 4 = outer
-# pinky Q column (= /COL4 = P0.10). Main-row letters land mirrored on
-# the unified 4x10 matrix; that is acceptable while we are still chasing
-# the COL3 / COL4 hardware issues. Flip back to a reversed list once the
-# matrix is reliable end-to-end.
-col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
+# Reverse order on the left half: keymap col 0 must be the outer pinky
+# (Q / A / Z column), which is wired to /COL4 = P0.10. col_pins[4] then
+# drives the inner-index column (/COL0 = P1.12 = T / G / B). This
+# matches the canonical QWERTY layout under the unified 4x10 keymap.
+# Right half stays natural (col 0 = inner Y) plus col_offset = 5.
+col_pins = ["P0_10", "P1_15", "P1_14", "P1_13", "P1_12"]
 # row2col = true  # set to scan in row2col direction (works for thumb diodes)
 
 # Seeed XIAO nRF52840's onboard RGB user LED is common anode:
