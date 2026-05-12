@@ -40,28 +40,24 @@
 #   contact" / "Type 2"). No firmware change can compensate cleanly for
 #   the wrong cable since two MCU pins are clamped to power rails.
 #
-# Diode direction (MIXED on the assembled boards we have!):
-#   The KiCad netlist places the anode on the ROW net for every diode
-#   on both main and thumb units. Empirically though:
-#     - row2col = true   → THUMB keys register, MAIN keys are dead
-#     - col2row default  → MAIN keys register, THUMB keys are dead
-#   This means the main-unit D1..D15 were soldered 180 deg from the
-#   silkscreen marker (anode physically on /COL), while the thumb-unit
-#   D1..D4 were soldered correctly (anode on /ROW). The two halves of
-#   the matrix therefore want opposite scan directions and a single
-#   RMK Matrix cannot serve both.
+# Diode direction (CONFIRMED 2026-05-12):
+#   Both main and thumb units use diodes installed PER SILKSCREEN —
+#   that is, the band/cathode marking matches the silkscreen K mark,
+#   so the ANODE is on the /ROW net (matching the KiCad netlist).
 #
-#   Workarounds:
-#     (a) hardware: reflow the 8 thumb diodes (4 per side) to match the
-#         reversed main orientation, then this col2row default works
-#         for the whole 38-key matrix. (Recommended — fewest reworks.)
-#     (b) firmware: replace the [#rmk_central] macro with a hand-rolled
-#         InputDevice using rmk::matrix::BidirectionalMatrix and a
-#         per-key scan_map, so each key picks its own drive/read
-#         direction. (~200 lines of Rust.)
+#   This means the matrix MUST be scanned in row2col direction (drive
+#   /ROW high, read /COL high) for the diode forward direction to
+#   match: current flows /ROW (anode) → switch → /COL (cathode →
+#   input).
 #
-#   Until either workaround is applied, we keep RMK at its col2row
-#   default so the main keyboard area at least registers normally.
+#   ⚠️ Earlier diagnoses incorrectly claimed main was reversed and
+#   recommended reflowing the thumb diodes to "match" — DO NOT follow
+#   that path. The correct configuration is:
+#       row2col = true on both [split.*.matrix] sections (set below)
+#       All diodes installed per silkscreen, both halves.
+#   If you reflow thumb diodes anode-on-/COL while main stays per-
+#   silkscreen, you create a MIXED matrix that no single RMK scan
+#   direction can serve.
 #
 # Column ordering: both halves currently use natural col_pins order,
 # matching the older build that demonstrated a working Space on SW5.
@@ -99,12 +95,9 @@ keymap = [
         ["A",    "S",    "D",    "F",    "G",         "H",    "J",    "K",    "L",    "Semicolon"],
         ["Z",    "X",    "C",    "V",    "B",         "N",    "M",    "Comma","Dot",  "Slash"],
         # Thumb diagnostic keymap. With LEFT col_pins reversed the
-        # column ordering on the left half goes outer-pinky-phantom →
-        # SW5 → SW4 → SW3 → SW2 (cols 0..4). To keep the user-facing
-        # convention of "inner-to-outer = A B C D" on the left half
-        # (and "inner-to-outer = E F G H" on the right half), put the
-        # letters in reverse order on the left: D at col 1 (outer
-        # thumb SW5), A at col 4 (inner thumb SW2).
+        # column ordering goes outer-phantom -> SW5 -> SW4 -> SW3 -> SW2
+        # (firmware cols 0..4). Inner-to-outer on the LEFT half =
+        # A B C D; on the RIGHT half = E F G H.
         ["No",   "D",    "C",    "B",    "A",         "E",    "F",    "G",    "H",   "No"],
     ],
     [
@@ -148,7 +141,7 @@ row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 # matches the canonical QWERTY layout under the unified 4x10 keymap.
 # Right half stays natural (col 0 = inner Y) plus col_offset = 5.
 col_pins = ["P0_10", "P1_15", "P1_14", "P1_13", "P1_12"]
-# row2col = true  # set to scan in row2col direction (works for thumb diodes)
+row2col = true  # drive /ROW high, read /COL — required for per-silkscreen diodes (anode on /ROW)
 
 # Seeed XIAO nRF52840's onboard RGB user LED is common anode:
 # low_active + initial_state_active turns it on as soon as RMK initializes GPIO.
@@ -169,7 +162,7 @@ row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 # Natural order: keymap col 5 (= central col 0 + col_offset) = inner index
 # = COL0 wire = P1.12; keymap col 9 = pinky = COL4 wire = P0.10.
 col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
-# row2col = true  # set to scan in row2col direction (works for thumb diodes)
+row2col = true  # drive /ROW high, read /COL — required for per-silkscreen diodes (anode on /ROW)
 
 [[split.peripheral.output]]
 pin = "P0_30"
