@@ -1334,6 +1334,7 @@ dependencies = [
  "rand_core 0.6.4",
  "rmk",
  "static_cell",
+ "usbd-hid 0.9.0",
  "xz2",
 ]
 
