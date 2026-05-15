@@ -32,11 +32,11 @@ jobs:
           workspaces: firmware -> target
 
       - name: Install cargo-hex-to-uf2
-        run: nix develop --command cargo install --locked cargo-hex-to-uf2
+        run: nix develop .#firmware --command cargo install --locked cargo-hex-to-uf2
 
       - name: Build central and peripheral
         run: |
-          nix develop --command bash -eux <<'EOF'
+          nix develop .#firmware --command bash -eux <<'EOF'
           cd firmware
           cargo build --release --bin central
           cargo build --release --bin peripheral

@@ -38,19 +38,19 @@ jobs:
             ${{ runner.os }}-pnpm-
 
       - name: Install dependencies
-        run: nix develop --command pnpm install --frozen-lockfile
+        run: nix develop ..#web --command pnpm install --frozen-lockfile
 
       - name: Lint (Biome)
-        run: nix develop --command pnpm lint
+        run: nix develop ..#web --command pnpm lint
 
       - name: Typecheck
-        run: nix develop --command pnpm typecheck
+        run: nix develop ..#web --command pnpm typecheck
 
       - name: Test
-        run: nix develop --command pnpm test
+        run: nix develop ..#web --command pnpm test
 
       - name: Build
-        run: nix develop --command pnpm build
+        run: nix develop ..#web --command pnpm build
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
