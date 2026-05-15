@@ -122,6 +122,15 @@ keymap = [
 
 [ble]
 enabled = true
+# Battery sensing via XIAO nRF52840 BLE's internal voltage divider:
+#   BAT+ pad → on-module 1M/1M divider → P0_31 (AIN7_BAT). Reading P0_31
+#   requires the divider path to be ENABLED, which is gated by P0_14 LOW
+#   (HIGH disables the path AND exposes P0_31 to up to 3.6V, risking
+#   damage). P0_14 is driven LOW by a persisted `[[split.*.output]]`
+#   declaration below for each half. Divider ratio = 1/2 (measured/total).
+battery_adc_pin = "P0_31"
+adc_divider_measured = 1
+adc_divider_total = 2
 
 [split]
 connection = "ble"
@@ -143,12 +152,17 @@ row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 col_pins = ["P0_10", "P1_15", "P1_14", "P1_13", "P1_12"]
 row2col = true  # drive /ROW high, read /COL — required for per-silkscreen diodes (anode on /ROW)
 
-# Seeed XIAO nRF52840's onboard RGB user LED is common anode:
-# low_active + initial_state_active turns it on as soon as RMK initializes GPIO.
+# Battery-sense enable for the central half: P0_14 must be driven LOW
+# permanently so the on-module BAT divider feeds P0_31 (see `[ble]` notes).
+# With low_active = false and initial_state_active = false, the persisted
+# output sits at Level::Low at boot and is never touched again.
+# The XIAO's onboard R/G/B LED pins (P0_26 / P0_30 / P0_06) are NOT declared
+# here as static outputs — `src/battery_led.rs` claims and animates them
+# dynamically based on battery percentage.
 [[split.central.output]]
-pin = "P0_30"
-low_active = true
-initial_state_active = true
+pin = "P0_14"
+low_active = false
+initial_state_active = false
 
 # LEFT-board trackball (PMW3610). Sits on the central MCU (= left half).
 # Pin mapping is documented at the top of this file:
@@ -187,10 +201,19 @@ row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
 col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
 row2col = true  # drive /ROW high, read /COL — required for per-silkscreen diodes (anode on /ROW)
 
+# Static boot-indicator green LED on the peripheral half. (No dynamic
+# battery-color controller on the peripheral yet — once the RIGHT board is
+# physically built, mirror `src/battery_led.rs` for the peripheral.)
 [[split.peripheral.output]]
 pin = "P0_30"
 low_active = true
 initial_state_active = true
+
+# Battery-sense enable for the peripheral half (see central side notes).
+[[split.peripheral.output]]
+pin = "P0_14"
+low_active = false
+initial_state_active = false
 
 # RIGHT-board trackball (PMW3610). Sits on the peripheral MCU.
 # Same pin map as the LEFT side — both XIAO boards are identical hardware.
