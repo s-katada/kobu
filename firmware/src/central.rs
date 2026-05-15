@@ -1,31 +1,35 @@
 #![no_main]
 #![no_std]
 
-mod battery_led;
+mod status_led;
 mod trackball;
 
 use rmk::macros::rmk_central;
 
 #[rmk_central]
 mod keyboard_central {
-    use crate::battery_led::BatteryLedController;
+    use crate::status_led::StatusLedController;
     use crate::trackball::{AxisRelabel, PointerProcessor, ScrollProcessor};
 
-    // Battery-color LED controller declared via the `rmk_macro` controller
+    // Status LED controller declared via the `rmk_macro` controller
     // attribute. The macro extracts the function body and emits
-    // `let mut battery_color_led = { <body> };` into the entry scope before
-    // our override runs, so `battery_color_led` is available below by the
-    // time we wire it into the task join. The R/G/B pins are claimed from
-    // `p` here — they're not registered as static `[[output]]` pins in
-    // keyboard.toml so `p.P0_26`, `p.P0_30`, and `p.P0_06` are still owned
-    // by the peripherals struct at this point.
-    #[controller(event)]
-    fn battery_color_led() {
+    // `let mut status_led = { <body> };` into the entry scope before our
+    // override runs, so `status_led` is available below when we wire it
+    // into the task join.
+    //
+    // The R/G/B pins are claimed from `p` here — they're not registered
+    // as static `[[output]]` pins in keyboard.toml so `p.P0_26`,
+    // `p.P0_30`, and `p.P0_06` are still owned by the peripherals struct
+    // at this point. Uses `#[controller(poll)]` so the controller's
+    // `update()` tick can deterministically expire the purple
+    // peripheral-activity hold window.
+    #[controller(poll)]
+    fn status_led() {
         use ::embassy_nrf::gpio::{Level, Output, OutputDrive};
         let red = Output::new(p.P0_26, Level::High, OutputDrive::Standard);
         let green = Output::new(p.P0_30, Level::High, OutputDrive::Standard);
         let blue = Output::new(p.P0_06, Level::High, OutputDrive::Standard);
-        BatteryLedController::new(red, green, blue)
+        StatusLedController::new(red, green, blue)
     }
 
     // Override the macro-generated entry so we can:
@@ -40,13 +44,13 @@ mod keyboard_central {
     //                                             peripheral PMW3610
     //   * `adc_device`, `battery_processor`     — SAADC + battery decoder
     //                                             (from `[ble]` config)
-    //   * `battery_color_led`                   — our controller (above)
+    //   * `status_led`                          — our controller (above)
     //   * `matrix`, `keyboard`, `keymap`,
     //     `storage`, `driver`, `stack`,
     //     `rmk_config`, `peripheral_addrs`      — boilerplate from the macro
     #[Overwritten(entry)]
     async fn rmk_entry() {
-        use ::rmk::controller::EventController;
+        use ::rmk::controller::PollingController;
         use ::rmk::input_device::Runnable;
 
         // Discard the macro-generated default Pmw3610Processor bindings.
@@ -82,7 +86,7 @@ mod keyboard_central {
                 ),
                 ::rmk::split::ble::central::scan_peripherals(&stack, &peripheral_addrs),
             ),
-            battery_color_led.event_loop(),
+            status_led.polling_loop(),
         )
         .await;
     }

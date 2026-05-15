@@ -43,6 +43,9 @@ embassy-executor = { version = "0.9", features = [
     "arch-cortex-m",
     "executor-thread",
 ] }
+# Used for the PERIPHERAL_ACTIVITY signal between PointerProcessor and the
+# status LED controller. Must match the version rmk pulls in.
+embassy-sync = "0.7"
 defmt = "1.0"
 defmt-rtt = "1.0"
 panic-probe = { version = "1.0", features = ["print-defmt"] }

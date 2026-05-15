@@ -24,11 +24,20 @@
 
 use core::cell::RefCell;
 
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
 use rmk::event::{Axis, Event};
 use rmk::hid::Report;
 use rmk::input_device::{InputDevice, InputProcessor, ProcessResult};
 use rmk::keymap::KeyMap;
 use usbd_hid::descriptor::MouseReport;
+
+/// One-shot pulse emitted by [`PointerProcessor`] every time the peripheral
+/// half forwards a Joystick(X,Y) event. The status-LED controller in
+/// `src/status_led.rs` watches this signal and forces the LED to purple for
+/// a short hold window, so the user sees the central LED light up while
+/// the right-hand trackball is being moved.
+pub static PERIPHERAL_ACTIVITY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Wraps an inner `InputDevice` and rewrites `Event::Joystick` axes
 /// X → H, Y → V. Used on the central side to tag locally-sourced
@@ -186,6 +195,11 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                     pan: 0,
                 };
                 self.send_report(Report::MouseReport(report)).await;
+                // Wake the status-LED controller so it can flash purple
+                // for the configured hold window. `Signal::signal` overwrites
+                // any pending value, which is fine — we only need the
+                // "something happened" edge, not a count.
+                PERIPHERAL_ACTIVITY.signal(());
                 ProcessResult::Stop
             }
             _ => ProcessResult::Continue(event),
