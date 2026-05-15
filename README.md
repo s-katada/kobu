@@ -2,6 +2,27 @@
 
 自作分割キーボード「kobitokey」にインスパイアされて作った派生キーボード「kobu」の KiCad プロジェクトとファームウェアです。親指キーを追加し、メインキー側を 2 キー削っています。
 
+## ディレクトリ構成
+
+| ディレクトリ | 中身 |
+|---|---|
+| [`pcb/`](pcb/) | KiCad プロジェクト (PCB / 回路図) |
+| [`case/`](case/) | ケースの STEP / STL |
+| [`firmware/`](firmware/) | RMK ベースのファームウェア (Rust, thumbv7em-none-eabihf) |
+| [`web/`](web/) | kobu 専用 Web キーマップエディタ (WebHID + Vial protocol, React) |
+
+## 開発環境
+
+ファームウェアと web app の両方を 1 つの Nix devshell で扱える:
+
+```sh
+nix develop
+# rustc + flip-link + probe-rs (firmware)
+# node 22 + pnpm           (web)
+```
+
+`flake.nix` が toolchain バージョンの単一情報源。CI も同じ devshell で走るので host とドリフトしない。
+
 ## 主要部品
 
 - スイッチ: Kailh Choc V2 ホットスワップ（1.00u）

@@ -1,0 +1,60 @@
+name: Web
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/web.yml"
+  pull_request:
+    paths:
+      - "web/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/web.yml"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: web
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: nix develop ..#web --command pnpm install --frozen-lockfile
+
+      - name: Lint (Biome)
+        run: nix develop ..#web --command pnpm lint
+
+      - name: Typecheck
+        run: nix develop ..#web --command pnpm typecheck
+
+      - name: Test
+        run: nix develop ..#web --command pnpm test
+
+      - name: Build
+        run: nix develop ..#web --command pnpm build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kobu-config-dist
+          path: web/dist
+          if-no-files-found: error
