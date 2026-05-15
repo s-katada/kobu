@@ -13,15 +13,28 @@
 
 ## 開発環境
 
-ファームウェアと web app の両方を 1 つの Nix devshell で扱える:
+`flake.nix` が toolchain バージョンの単一情報源。CI も同じ devshell で走るので host とドリフトしない。
+
+### direnv ですぐに使う (推奨)
+
+[nix-direnv](https://github.com/nix-community/nix-direnv) を入れていれば `cd` するだけで対応する devshell が自動起動する:
 
 ```sh
-nix develop
-# rustc + flip-link + probe-rs (firmware)
-# node 22 + pnpm           (web)
+direnv allow              # 初回のみ
+cd ~/git/private/kobu     # → 全部入り devshell (firmware + web)
+cd firmware/              # → firmware-only (Rust + flip-link + probe-rs)
+cd web/                   # → web-only      (Node 22 + pnpm)
 ```
 
-`flake.nix` が toolchain バージョンの単一情報源。CI も同じ devshell で走るので host とドリフトしない。
+各ディレクトリの `.envrc` が `flake.nix` の対応する `devShells.*` を `use flake` で読み込む構成。
+
+### 手動で起動する場合
+
+```sh
+nix develop               # 全部入り
+nix develop .#firmware    # firmware のみ
+nix develop .#web         # web のみ
+```
 
 ## 主要部品
 
