@@ -1,4 +1,4 @@
-# kobitokey-o-oyayubi firmware configuration.
+# kobu firmware configuration.
 #
 # Hardware: split keyboard with two XIAO nRF52840 BLE modules (one on each
 # thumb-unit PCB). Each side has a 4x5 scan matrix covering 15 main-unit
@@ -70,8 +70,8 @@
 # ROW/COL nets are shared between main and thumb boards via J1.
 
 [keyboard]
-name = "kobitokey-o-oyayubi"
-product_name = "kobitokey-o-oyayubi"
+name = "kobu"
+product_name = "kobu"
 vendor_id = 0x4b4f
 product_id = 0x4259
 manufacturer = "s-katada"
@@ -192,9 +192,28 @@ pin = "P0_30"
 low_active = true
 initial_state_active = true
 
-# Right-board trackball (peripheral) intentionally omitted. The user has
-# only the LEFT board built; once the RIGHT board exists, re-add a
-# `[[split.peripheral.input_device.pmw3610]]` block here.
+# RIGHT-board trackball (PMW3610). Sits on the peripheral MCU.
+# Same pin map as the LEFT side — both XIAO boards are identical hardware.
+# Like the LEFT side, MOTION is intentionally not configured (driver polls
+# continuously) and force_awake disables power-saving.
+#
+# The peripheral emits Joystick(X,Y,_) events that are forwarded as
+# SplitMessage::Event to the central. The central's processor chain in
+# `src/central.rs` routes those untouched-X/Y events to PointerProcessor
+# (= mouse motion), while central-local events are relabeled X→H, Y→V by
+# AxisRelabel so they reach ScrollProcessor instead. See
+# `src/trackball.rs`.
+[[split.peripheral.input_device.pmw3610]]
+name = "right"
+cpi = 800
+force_awake = true
+
+[split.peripheral.input_device.pmw3610.spi]
+instance = ""
+sck = "P0_03"
+mosi = "P0_02"
+miso = ""
+cs = "P0_09"
 
 [rmk]
 split_peripherals_num = 1

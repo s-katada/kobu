@@ -1312,7 +1312,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kobitokey-o-oyayubi"
+name = "kobu"
 version = "0.1.0"
 dependencies = [
  "bt-hci",

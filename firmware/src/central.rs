@@ -1,33 +1,41 @@
 #![no_main]
 #![no_std]
 
-mod scroll_processor;
+mod trackball;
 
 use rmk::macros::rmk_central;
 
 #[rmk_central]
 mod keyboard_central {
-    use crate::scroll_processor::ScrollProcessor;
+    use crate::trackball::{AxisRelabel, PointerProcessor, ScrollProcessor};
 
-    // Override the macro-generated entry so we can swap the default
-    // `Pmw3610Processor` (which emits MouseReport x/y) for our own
-    // `ScrollProcessor` (which emits MouseReport wheel). All other
-    // generated bindings (`left_device`, `matrix`, `keyboard`, `keymap`,
-    // `driver`, `stack`, `storage`, `rmk_config`, `peripheral_addrs`)
-    // remain in scope and are reused verbatim.
+    // Override the macro-generated entry so we can:
+    //   1. wrap the local PMW3610 device with AxisRelabel (X→H, Y→V), and
+    //   2. run our own [ScrollProcessor, PointerProcessor] chain instead of
+    //      the default Pmw3610Processor pair the macro would emit for the
+    //      central's "left" and the peripheral's "right" devices.
     //
-    // The variable names emitted by the rmk_macro 0.7 pmw3610 expansion are
-    // `<sensor.name>_device` and `<sensor.name>_processor` (no `pmw3610_`
-    // prefix); with `name = "left"` in keyboard.toml those are
-    // `left_device` and `left_processor`.
+    // Variable bindings still in scope from the macro:
+    //   * `left_device`, `left_processor`     — central-local PMW3610
+    //                                           (`name = "left"` in toml)
+    //   * `right_processor`                    — placeholder for the
+    //                                           peripheral PMW3610 (name =
+    //                                           "right"); the device itself
+    //                                           runs on the peripheral
+    //   * `matrix`, `keyboard`, `keymap`, `storage`, `driver`, `stack`,
+    //     `rmk_config`, `peripheral_addrs`     — boilerplate from the macro
     #[Overwritten(entry)]
     async fn rmk_entry() {
         use ::rmk::input_device::Runnable;
 
-        // Discard the macro-generated default processor.
+        // Discard the macro-generated default Pmw3610Processor bindings;
+        // we route through our own chain below.
         let _ = left_processor;
+        let _ = right_processor;
 
+        let mut left_relabeled = AxisRelabel::new(left_device);
         let mut scroll_processor = ScrollProcessor::new(&keymap);
+        let mut pointer_processor = PointerProcessor::new(&keymap);
 
         ::rmk::embassy_futures::join::join(
             ::rmk::embassy_futures::join::join(
@@ -35,14 +43,14 @@ mod keyboard_central {
                     ::rmk::embassy_futures::join::join(
                         ::rmk::embassy_futures::join::join(
                             ::rmk::run_devices!(
-                                (left_device, matrix) => ::rmk::channel::EVENT_CHANNEL,
+                                (left_relabeled, matrix) => ::rmk::channel::EVENT_CHANNEL,
                             ),
                             keyboard.run(),
                         ),
                         ::rmk::run_rmk(&keymap, driver, &stack, &mut storage, rmk_config),
                     ),
                     ::rmk::run_processor_chain!(
-                        ::rmk::channel::EVENT_CHANNEL => [scroll_processor],
+                        ::rmk::channel::EVENT_CHANNEL => [scroll_processor, pointer_processor],
                     ),
                 ),
                 ::rmk::split::central::run_peripheral_manager::<4, 5, 0, 5, _>(
