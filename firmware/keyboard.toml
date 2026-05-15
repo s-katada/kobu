@@ -1,4 +1,4 @@
-# kobitokey-o-oyayubi firmware configuration.
+# kobu firmware configuration.
 #
 # Hardware: split keyboard with two XIAO nRF52840 BLE modules (one on each
 # thumb-unit PCB). Each side has a 4x5 scan matrix covering 15 main-unit
@@ -70,8 +70,8 @@
 # ROW/COL nets are shared between main and thumb boards via J1.
 
 [keyboard]
-name = "kobitokey-o-oyayubi"
-product_name = "kobitokey-o-oyayubi"
+name = "kobu"
+product_name = "kobu"
 vendor_id = 0x4b4f
 product_id = 0x4259
 manufacturer = "s-katada"

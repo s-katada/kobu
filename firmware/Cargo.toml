@@ -1,8 +1,8 @@
 [package]
-name = "kobitokey-o-oyayubi"
+name = "kobu"
 version = "0.1.0"
 authors = ["s-katada <s-katada@mksc.jp>"]
-description = "Firmware for kobitokey-o-oyayubi split keyboard with trackball"
+description = "Firmware for kobu split keyboard with trackball"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 

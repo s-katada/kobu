@@ -1,5 +1,5 @@
 {
-  description = "kobitokey-o-oyayubi firmware & hardware";
+  description = "kobu firmware & hardware";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -57,7 +57,7 @@
           };
 
           shellHook = ''
-            echo "kobitokey-o-oyayubi devshell ready"
+            echo "kobu devshell ready"
             echo "  rustc: $(rustc --version)"
             if ! command -v rmkit >/dev/null 2>&1; then
               echo "  note: 'rmkit' is not installed in this shell."

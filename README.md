@@ -1,6 +1,6 @@
-# kobitokey-o-oyayubi
+# kobu
 
-自作分割キーボード「kobitokey」の親指キーを拡張したバージョンの KiCad プロジェクトとファームウェアです。
+自作分割キーボード「kobitokey」にインスパイアされて作った派生キーボード「kobu」の KiCad プロジェクトとファームウェアです。親指キーを追加し、メインキー側を 2 キー削っています。
 
 ## 主要部品
 
@@ -12,4 +12,4 @@
 
 ## キーマップ
 
-![keymap](firmware/keymap/kobitokey-o-oyayubi.svg)
+![keymap](firmware/keymap/kobu.svg)
