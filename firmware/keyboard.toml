@@ -243,4 +243,45 @@ split_peripherals_num = 1
 ble_profiles_num = 4
 combo_max_num = 16
 
+# Vial / Web keymap editor wiring.
+# Vial speaks USB Raw HID (vendor usage page 0xFF60), so it's only reachable
+# when central is plugged in via USB. BLE-only sessions cannot edit keymap.
+# See README "Vial usage" section and tracking issue #12 for upstream BLE
+# editor support.
+[host]
+# `vial_enabled` defaults to true in RMK 0.8 but is declared explicitly so a
+# future default change can't silently disable Vial.
+vial_enabled = true
+# Physical (row, col) chord required to authorize keymap mutations from Vial.
+# LEFT col_pins are reversed, so keymap col 0 = /COL4 wire = physical outer
+# pinky on the LEFT half (= Q key). RIGHT col_pins are natural, so col 9 =
+# /COL4 wire = physical outer pinky on the RIGHT half (= P key). Pressing
+# both outer-pinkies simultaneously is virtually impossible during normal
+# typing, which keeps Vial locked unless explicitly invoked.
+#
+# These are MATRIX positions in the 4x10 unified layout, NOT logical
+# keycodes — relabeling Q or P in Vial does not change the unlock chord.
+unlock_keys = [[0, 0], [0, 9]]
+
+# Persistent flash storage for keymap, bonds, and Vial state.
+#
+# RMK 0.8's nrf52840 default places storage at 0xA0000..0xC0000 (128 KiB).
+# We pin both fields explicitly so a default change upstream cannot move
+# our region under us and orphan existing flash data.
+#
+# Flash layout (matches `memory.x` — keep in sync if either side changes):
+#   0x000000..0x001000 (   4 KiB)  MBR
+#   0x001000..0x0A0000 ( 636 KiB)  app code (linker-managed, declared in memory.x)
+#   0x0A0000..0x0C0000 ( 128 KiB)  RMK storage (this section)
+#   0x0C0000..0x0F4000 ( 208 KiB)  unused / bootloader settings
+#   0x0F4000..0x100000 (  48 KiB)  Adafruit UF2 bootloader
+#
+# `clear_layout` and `clear_storage` stay false in normal builds. To
+# factory-reset keymap (preserving BLE bonds) flip clear_layout=true,
+# flash once, then flip back. To wipe bonds too use clear_storage=true.
 [storage]
+enabled = true
+start_addr = 0xA0000
+num_sectors = 32
+clear_layout = false
+clear_storage = false
