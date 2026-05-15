@@ -112,8 +112,27 @@ keymap = [
         ["F11",  "F12",  "No",   "No",   "No",        "No",   "No",   "No",   "No",   "No"],
         ["_",    "_",    "_",    "_",    "_",         "_",    "_",    "_",    "_",    "_"],
     ],
+    # Layer 3 — Bluetooth / output management.
+    #
+    # Vial's "user keycodes" are pre-wired in RMK 0.8 (`keyboard.rs` /
+    # `process_user`) to BLE profile actions, indexed off `NUM_BLE_PROFILE`
+    # (= `ble_profiles_num` above = 4). With 4 profiles the mapping is:
+    #   User0..User3  → switch to profile 0..3
+    #   User4         → next profile
+    #   User5         → previous profile
+    #   User6         → clear bond for current profile
+    #   User7         → toggle default output between USB and BLE
+    #   User8 (held 5s) → clear split-peer bond  (not bound here yet)
+    # The names in vial.json `customKeycodes` are pure UI labels — RMK
+    # always derives the action from the User-keycode number, so the two
+    # lists must agree on order or Vial will mislabel the actions.
+    #
+    # Reachability: there is currently no key on layers 0..2 that activates
+    # layer 3. Either bind a thumb key to MO(3) once the thumb cluster
+    # graduates from its diagnostic layout, or use Vial itself to put
+    # MO(3) somewhere temporarily for testing.
     [
-        ["No",   "No",   "No",   "No",   "No",        "No",   "No",   "No",   "No",   "No"],
+        ["User0","User1","User2","User3","User4",     "User5","User6","User7","No",   "No"],
         ["No",   "No",   "No",   "No",   "No",        "No",   "No",   "No",   "No",   "No"],
         ["No",   "No",   "No",   "No",   "No",        "No",   "No",   "No",   "No",   "No"],
         ["_",    "_",    "_",    "_",    "_",         "_",    "_",    "_",    "_",    "_"],
