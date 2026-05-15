@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme {
+  --color-kobu-accent: oklch(0.65 0.25 290);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
