@@ -1,5 +1,5 @@
 {
-  description = "kobu firmware & hardware";
+  description = "kobu firmware, hardware & web config app";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -29,10 +29,17 @@
           ])
           pkgs.fenix.targets.thumbv7em-none-eabihf.stable.rust-std
         ];
+
+        # Node + pnpm pin the kobu-config web app's toolchain. Bumping
+        # the Node major here is the single source of truth — CI reads
+        # this via `nix develop`, local dev reads it via `nix develop`
+        # too, so they can't drift.
+        nodejs = pkgs.nodejs_22;
       in
       {
         devShells.default = pkgs.mkShell {
           packages = [
+            # ── Firmware (Rust embedded) ──
             rustToolchain
             pkgs.flip-link
             pkgs.probe-rs-tools
@@ -45,6 +52,10 @@
             pkgs.clang
             # Render keymap SVG from firmware/keymap/*.yaml.
             pkgs.python3Packages.keymap-drawer
+
+            # ── Web app (kobu-config under web/) ──
+            nodejs
+            pkgs.pnpm
           ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
             pkgs.systemd
           ];
@@ -59,6 +70,8 @@
           shellHook = ''
             echo "kobu devshell ready"
             echo "  rustc: $(rustc --version)"
+            echo "  node:  $(node --version)"
+            echo "  pnpm:  $(pnpm --version)"
             if ! command -v rmkit >/dev/null 2>&1; then
               echo "  note: 'rmkit' is not installed in this shell."
               echo "  install with: cargo install --locked rmkit"

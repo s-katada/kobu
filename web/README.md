@@ -1,17 +1,18 @@
-# kobu-config
+# kobu-config (web app)
 
-Web-based keymap editor for the [kobu](https://github.com/s-katada/kobu) split keyboard.
+Web-based keymap editor for the kobu split keyboard, served as a single-page
+app. Talks to kobu's central half over USB via the WebHID API and the Vial
+wire protocol — no native install, no driver required.
 
-Talks to kobu's central half over USB via the WebHID API and the Vial wire
-protocol — no native install, no driver required. Runs entirely in the
-browser as a single-page app.
+The web app lives inside the kobu monorepo. Firmware is at
+[`../firmware/`](../firmware/), hardware at [`../pcb/`](../pcb/).
 
 ## Status
 
-Scaffold only — UI shows a placeholder "Connect" screen that detects WebHID
-support but doesn't do anything yet. The Vial transport layer lands in
-[s-katada/kobu#23](https://github.com/s-katada/kobu/issues/23). The full
-roadmap lives at [s-katada/kobu#41](https://github.com/s-katada/kobu/issues/41).
+Phase 0–2 of the roadmap is in. Transport, full Vial protocol layer
+(handshake / keymap / unlock / reset), and a minimal "connect & show
+metadata" UI. Phase 3 (the actual keymap editor UI) is still to do —
+see the open issues under the `kobu-config` label.
 
 ## Browser support
 
@@ -20,7 +21,13 @@ Chrome on Android (USB-OTG). Safari and Firefox cannot run this app.
 
 ## Develop
 
+The kobu nix devshell provides Node and pnpm — the same versions CI uses.
+Enter it from the **repo root** (one level up from this directory):
+
 ```sh
+nix develop                # at the kobu repo root
+
+cd web
 pnpm install
 pnpm dev      # http://localhost:5173
 pnpm test     # vitest
@@ -28,7 +35,9 @@ pnpm lint     # biome
 pnpm build    # production bundle in dist/
 ```
 
-Requires Node 22+ and pnpm 11+.
+`flake.nix` pins Node 22 and pnpm. Bumping the Node major is a one-line
+change in `../flake.nix` and CI picks it up automatically — local dev and
+CI cannot drift.
 
 ## Tech stack
 
@@ -39,7 +48,8 @@ Requires Node 22+ and pnpm 11+.
 - Biome 2 (lint + format)
 - Vitest 4 (unit tests, jsdom)
 
-The picks live in [s-katada/kobu#21](https://github.com/s-katada/kobu/issues/21).
+Decisions log: [#21](https://github.com/s-katada/kobu/issues/21).
+Roadmap meta: [#41](https://github.com/s-katada/kobu/issues/41).
 
 ## License
 
