@@ -16,7 +16,9 @@
 
 ## Vial でキーマップを編集する
 
-ブラウザから kobu のキーマップ・マクロ・コンボを動的に編集できます。RMK が公式に提供しているオンライン編集ルートは Vial 互換のみで、**USB Raw HID 経由**でしか繋がりません。日常的に BLE で使っていても、編集時だけ USB ケーブルを挿す必要があります。
+ブラウザから kobu のキーマップ・マクロ・コンボを動的に編集できます。RMK が公式に提供しているオンライン編集ルートは Vial 互換のみで、**ブラウザ (vial.rocks) からは USB Raw HID 経由**でしか繋がりません。日常的に BLE で使っていても、編集時だけ USB ケーブルを挿す必要があります。
+
+> **補足**: RMK 0.8 のファームウェア自体は BLE でも Vial プロトコルを喋れます ([`BleVialServer`](https://github.com/HaoboGu/rmk/blob/main/rmk/src/ble/host_service/vial.rs) として実装済み)。ただし Web Bluetooth は HID service UUID `0x1812` をブロックリストで除外しているため vial.rocks からは届きません。Linux/Windows の **Vial デスクトップアプリ** であれば BLE 経由で接続できる可能性がありますが、kobu 上での動作確認はまだ取れていません。
 
 ### 必要なもの
 
@@ -71,6 +73,7 @@ BLE ペアリング情報も含めて全部消したいときは `clear_storage 
 
 ### 既知の制約
 
-- **BLE 接続中のみでは Vial を使えない**。Vial プロトコルは USB Raw HID 経由でしか動きません。
+- **vial.rocks (Web Bluetooth) からは BLE 経由で繋げない**。HID service が Web Bluetooth のブロックリストにあるため。ブラウザ編集は USB ケーブル必須。
+- **Vial デスクトップアプリ + BLE での編集は未検証**。RMK 0.8 の `BleVialServer` は実装されているので Linux/Windows の Vial 経由なら届く可能性あり。動いた人がいたら issue 起票歓迎。
 - **peripheral 側（右半分）は USB に挿しても Vial で認識されない**。Vial 通信は central だけが処理します。
-- BLE 経由 / Web Bluetooth 経由の編集は RMK 0.8 時点では未対応。上流の動向は [#12](https://github.com/s-katada/kobu/issues/12) で追跡しています。
+- 完全な Web 経由 (Web Bluetooth or WebUSB) 編集は RMK upstream の独自プロトコル ([HaoboGu/rmk#558](https://github.com/HaoboGu/rmk/issues/558)) 完成待ち。
