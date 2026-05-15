@@ -3,6 +3,14 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
+    # Node 26 hasn't propagated from staging-next into nixos-unstable yet
+    # (as of 2026-05-16). Pull `nodejs_26` from staging-next directly while
+    # keeping the rest of the toolchain on the stable channel. Re-evaluate
+    # when nixos-unstable catches up — at that point this input can be
+    # removed and `nodejs` below should switch to `pkgs.nodejs_26`.
+    nixpkgs-node.url = "github:NixOS/nixpkgs/staging-next";
+
     flake-utils.url = "github:numtide/flake-utils";
     fenix = {
       url = "github:nix-community/fenix";
@@ -10,13 +18,14 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, fenix }:
+  outputs = { self, nixpkgs, nixpkgs-node, flake-utils, fenix }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
           inherit system;
           overlays = [ fenix.overlays.default ];
         };
+        pkgsNode = import nixpkgs-node { inherit system; };
 
         rustToolchain = pkgs.fenix.combine [
           (pkgs.fenix.stable.withComponents [
@@ -33,7 +42,9 @@
         # Single source of truth for the web app's toolchain. Bump the
         # Node major here and both `nix develop` (local dev) and the
         # `Web` CI workflow follow automatically — they cannot drift.
-        nodejs = pkgs.nodejs_22;
+        # See comment on the `nixpkgs-node` input above for why this
+        # currently routes through staging-next.
+        nodejs = pkgsNode.nodejs_26;
 
         firmwarePackages = [
           rustToolchain

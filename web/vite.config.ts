@@ -10,5 +10,10 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     setupFiles: ['./src/test/setup.ts'],
+    // Vitest's default `exclude` already covers `node_modules` and
+    // `dist`, but not `.direnv` — direnv copies flake inputs (full
+    // nixpkgs sources, etc.) underneath it and they contain their
+    // own tests we definitely do not want to run.
+    exclude: ['**/node_modules/**', '**/dist/**', '**/.direnv/**'],
   },
 });

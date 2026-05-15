@@ -23,7 +23,7 @@
 direnv allow              # 初回のみ
 cd ~/git/private/kobu     # → 全部入り devshell (firmware + web)
 cd firmware/              # → firmware-only (Rust + flip-link + probe-rs)
-cd web/                   # → web-only      (Node 22 + pnpm)
+cd web/                   # → web-only      (Node 26 + pnpm)
 ```
 
 各ディレクトリの `.envrc` が `flake.nix` の対応する `devShells.*` を `use flake` で読み込む構成。

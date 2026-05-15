@@ -35,7 +35,7 @@ pnpm lint     # biome
 pnpm build    # production bundle in dist/
 ```
 
-`flake.nix` pins Node 22 and pnpm. Bumping the Node major is a one-line
+`flake.nix` pins Node 26 and pnpm. Bumping the Node major is a one-line
 change in `../flake.nix` and CI picks it up automatically — local dev and
 CI cannot drift.
 
