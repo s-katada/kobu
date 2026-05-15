@@ -1,0 +1,32 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/vial.json"
+      - "firmware/keyboard.toml"
+      - "firmware/scripts/lint_keymap_config.py"
+      - ".github/workflows/lint.yml"
+  pull_request:
+    paths:
+      - "firmware/vial.json"
+      - "firmware/keyboard.toml"
+      - "firmware/scripts/lint_keymap_config.py"
+      - ".github/workflows/lint.yml"
+  workflow_dispatch:
+
+jobs:
+  keymap-config:
+    name: vial.json ↔ keyboard.toml consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run lint
+        run: python3 firmware/scripts/lint_keymap_config.py
