@@ -30,6 +30,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: firmware -> target
+          # Bust the cache when the nix-pinned toolchain changes.
+          # Without this, a `flake.lock` bump can leave cached
+          # build-script binaries linking to stale /nix/store paths
+          # and fail the build with "No such file or directory".
+          key: ${{ hashFiles('flake.lock') }}
 
       - name: Install cargo-hex-to-uf2
         run: nix develop .#firmware --command cargo install --locked cargo-hex-to-uf2
