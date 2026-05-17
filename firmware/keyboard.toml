@@ -94,11 +94,13 @@ keymap = [
         ["Q",    "W",    "E",    "R",    "T",         "Y",    "U",    "I",    "O",    "P"],
         ["A",    "S",    "D",    "F",    "G",         "H",    "J",    "K",    "L",    "Semicolon"],
         ["Z",    "X",    "C",    "V",    "B",         "N",    "M",    "Comma","Dot",  "Slash"],
-        # Thumb diagnostic keymap. With LEFT col_pins reversed the
-        # column ordering goes outer-phantom -> SW5 -> SW4 -> SW3 -> SW2
-        # (firmware cols 0..4). Inner-to-outer on the LEFT half =
-        # A B C D; on the RIGHT half = E F G H.
-        ["No",   "D",    "C",    "B",    "A",         "E",    "F",    "G",    "H",   "No"],
+        # Thumb row. (3, 0) and (3, 9) are phantom slots on the
+        # outer-pinky /COL4 wire where the PCB has no switch.
+        # LEFT thumbs (outer -> inner, cols 1..4) = LCtrl LAlt MO(2) Space.
+        # RIGHT thumbs (inner -> outer, cols 5..8) = Enter MO(1) RShift RAlt.
+        # MO(3) (Bluetooth layer) is not bound on the physical layout;
+        # use Vial to reach layer 3 — see README "Layer 3" section.
+        ["No",   "LCtrl","LAlt", "MO(2)","Space",     "Enter","MO(1)","RShift","RAlt","No"],
     ],
     [
         ["Kc1",  "Kc2",  "Kc3",  "Kc4",  "Kc5",       "Kc6",  "Kc7",  "Kc8",  "Kc9",  "Kc0"],
@@ -128,9 +130,7 @@ keymap = [
     # lists must agree on order or Vial will mislabel the actions.
     #
     # Reachability: there is currently no key on layers 0..2 that activates
-    # layer 3. Either bind a thumb key to MO(3) once the thumb cluster
-    # graduates from its diagnostic layout, or use Vial itself to put
-    # MO(3) somewhere temporarily for testing.
+    # layer 3. Bind a key to MO(3) via Vial when BLE management is needed.
     [
         ["User0","User1","User2","User3","User4",     "User5","User6","User7","No",   "No"],
         ["No",   "No",   "No",   "No",   "No",        "No",   "No",   "No",   "No",   "No"],
