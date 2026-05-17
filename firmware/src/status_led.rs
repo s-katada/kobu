@@ -1,6 +1,6 @@
 //! Onboard RGB LED status controller for the LEFT / central half.
 //!
-//! Combines two state sources on the same R/G/B GPIOs (P0.26 / P0.30 / P0.06,
+//! Combines three state sources on the same R/G/B GPIOs (P0.26 / P0.30 / P0.06,
 //! all common-anode: pin LOW = on):
 //!
 //! 1. **Battery percent** — subscribed from `CONTROLLER_CHANNEL`. Determines
@@ -9,25 +9,46 @@
 //!      * `> 20%` → yellow (red + green)
 //!      * `≤ 20%` → red
 //!
-//! 2. **Peripheral trackball activity** — subscribed from
+//! 2. **Physical VBUS (USB cable) presence** — sampled directly from the
+//!    nRF52840 POWER peripheral's `USBREGSTATUS.VBUSDETECT` flag on every
+//!    [`update`] tick. This is what hardware actually signals (USB cable
+//!    plugged in supplying power), unlike `ControllerEvent::ConnectionType`
+//!    which tracks the user's stored output preference. When VBUS is high
+//!    the keyboard is being powered through USB, so the red "low battery"
+//!    warning is not informative — the LED is forced to green for that case
+//!    (covers "no battery plugged in" and "battery so dead it reads 0%").
+//!    Yellow and green battery states pass through unchanged. Safe to share
+//!    the POWER peripheral with embassy-nrf's `HardwareVbusDetect` because
+//!    `USBREGSTATUS` is read-only and atomic.
+//!
+//! 3. **Peripheral trackball activity** — subscribed from
 //!    [`crate::trackball::PERIPHERAL_ACTIVITY`], which the
 //!    [`crate::trackball::PointerProcessor`] pulses on every Joystick(X,Y)
 //!    event forwarded from the peripheral. While the peripheral ball has
 //!    been moving in the last [`PURPLE_HOLD`], the LED is forced to purple
 //!    (red + blue). Once the hold window expires the LED returns to the
-//!    battery color.
+//!    battery / VBUS color.
 //!
 //! Implemented as a [`PollingController`] so the 200 ms "purple hold" can
 //! deterministically expire via the periodic [`update`] tick even when no
-//! new events arrive.
+//! new events arrive — the same tick also re-samples VBUS so a USB-cable
+//! plug / unplug is reflected on the LED within ≤ 50 ms.
 
 use embassy_nrf::gpio::Output;
+use embassy_nrf::pac;
 use embassy_time::{Duration, Instant};
 use rmk::channel::{CONTROLLER_CHANNEL, ControllerSub};
 use rmk::controller::{Controller, PollingController};
 use rmk::event::ControllerEvent;
 
 use crate::trackball::PERIPHERAL_ACTIVITY;
+
+/// Read the nRF52840 POWER peripheral's VBUS-present flag. `true` means a
+/// USB cable is plugged in and supplying power, regardless of which output
+/// (USB vs BLE) the keyboard is currently routing key events through.
+fn vbus_present() -> bool {
+    pac::POWER.usbregstatus().read().vbusdetect()
+}
 
 /// How long the LED stays purple after each peripheral trackball event.
 const PURPLE_HOLD: Duration = Duration::from_millis(200);
@@ -110,7 +131,19 @@ impl<'d> StatusLedController<'d> {
     fn target_color(&self) -> Color {
         match self.peripheral_active_until {
             Some(until) if until > Instant::now() => Color::Purple,
-            _ => self.battery.as_color(),
+            _ => {
+                let base = self.battery.as_color();
+                // While USB cable is plugged in (VBUS high), suppress the
+                // "low battery" red — there is no battery (or it reads 0%)
+                // but the keyboard is being powered by the cable, so red is
+                // a false alarm. Yellow / green still pass through to
+                // reflect a healthy battery alongside USB (charging).
+                if vbus_present() && base == Color::Red {
+                    Color::Green
+                } else {
+                    base
+                }
+            }
         }
     }
 
@@ -164,7 +197,9 @@ impl<'d> Controller for StatusLedController<'d> {
     /// Wait for either a relevant `ControllerEvent` on `CONTROLLER_CHANNEL`
     /// or a pulse on `PERIPHERAL_ACTIVITY`. Irrelevant events (everything
     /// other than `Battery`) are filtered out here so `process_event`
-    /// doesn't wake up the LED logic for nothing.
+    /// doesn't wake up the LED logic for nothing. VBUS state is sampled
+    /// directly inside [`target_color`] / [`update`], not delivered as an
+    /// event — embassy-nrf's `HardwareVbusDetect` owns the POWER interrupt.
     async fn next_message(&mut self) -> LedEvent {
         use rmk::embassy_futures::select::{Either, select};
         loop {
