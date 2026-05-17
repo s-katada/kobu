@@ -75,7 +75,8 @@ product_name = "kobu"
 vendor_id = 0x4b4f
 product_id = 0x4259
 manufacturer = "s-katada"
-chip = "nrf52840"
+# Seeed XIAO nRF52840 BLE — enables the nrf52840 chip defaults in RMK.
+board = "XIAO BLE"
 usb_enable = true
 
 [layout]
@@ -141,6 +142,9 @@ keymap = [
 
 [ble]
 enabled = true
+# nRF52840 max is 8 dBm. Stronger advertising helps Mac discover the keyboard
+# at the edge of the room; RMK's advertise path also requests +8 dBm.
+default_tx_power = 8
 # Battery sensing via XIAO nRF52840 BLE's internal voltage divider:
 #   BAT+ pad → on-module 1M/1M divider → P0_31 (AIN7_BAT). Reading P0_31
 #   requires the divider path to be ENABLED, which is gated by P0_14 LOW
@@ -150,6 +154,14 @@ enabled = true
 battery_adc_pin = "P0_31"
 adc_divider_measured = 1
 adc_divider_total = 2
+
+# XIAO nRF52840 runs from a LiPo. DCDC must be on for stable RF — the generic
+# nrf52840.toml chip default ships with reg0/reg1 disabled, which weakens BLE
+# and can make the device invisible to macOS Bluetooth settings.
+[chip.nrf52840]
+dcdc_reg0 = true
+dcdc_reg1 = true
+dcdc_reg0_voltage = "3V3"
 
 [split]
 connection = "ble"
@@ -298,6 +310,11 @@ unlock_keys = [[0, 0], [0, 9]]
 # `clear_layout` and `clear_storage` stay false in normal builds. To
 # factory-reset keymap (preserving BLE bonds) flip clear_layout=true,
 # flash once, then flip back. To wipe bonds too use clear_storage=true.
+#
+# If macOS still does not list "kobu" after flashing this firmware, an
+# older build may have stored USB-priority in flash (RMK #157). Either
+# press Layer-3 "Switch Output" once while on USB, or flash once with
+# clear_storage=true (wipes bonds) then set it back to false.
 [storage]
 enabled = true
 start_addr = 0xA0000
