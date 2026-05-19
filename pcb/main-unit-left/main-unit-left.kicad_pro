@@ -490,7 +490,7 @@
       "plot": "../../../../Downloads/private/3d_models/kobu-key/main-left-kairo",
       "pos_files": "../../../../Downloads/private/3d_models/kobu-key/",
       "specctra_dsn": "",
-      "step": "",
+      "step": "main-unit-left.step",
       "svg": "",
       "vrml": ""
     },
