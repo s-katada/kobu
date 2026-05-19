@@ -16,7 +16,7 @@ if (typeof globalThis.localStorage === 'undefined' || globalThis.localStorage ==
       store = {};
     },
     getItem(key) {
-      return Object.prototype.hasOwnProperty.call(store, key) ? (store[key] ?? null) : null;
+      return Object.hasOwn(store, key) ? (store[key] ?? null) : null;
     },
     key(index) {
       return Object.keys(store)[index] ?? null;
