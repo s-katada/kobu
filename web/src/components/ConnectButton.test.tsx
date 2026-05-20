@@ -153,4 +153,35 @@ describe('ConnectButton', () => {
     await userEvent.click(screen.getByRole('button', { name: '再試行' }));
     expect(clearError).toHaveBeenCalledTimes(1);
   });
+
+  it('trySilentReconnect runs only once even if the store transitions back to idle', async () => {
+    setState({ kind: 'idle' });
+    const { trySilentReconnect } = stubStoreActions();
+    const { rerender } = render(<ConnectButton />);
+    expect(trySilentReconnect).toHaveBeenCalledTimes(1);
+    // Simulate a connected → disconnected transition (e.g. the user
+    // clicks 切断, which the store turns into 'idle'). The effect
+    // must NOT re-fire silent reconnect, otherwise the disconnect
+    // button is useless.
+    setState({
+      kind: 'ready',
+      transport: NOOP_TRANSPORT,
+      handshake: {
+        viaProtocolVersion: 0x0009,
+        keyboardId: {
+          vialProtocolVersion: 6,
+          uid: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
+          featureFlags: 0,
+        },
+        definition: { matrix: { rows: 4, cols: 10 }, layouts: { keymap: [] } },
+        isKobu: true,
+      },
+      deviceName: 'kobu',
+      definitionFromCache: false,
+    } as ConnectionState);
+    rerender(<ConnectButton />);
+    setState({ kind: 'idle' });
+    rerender(<ConnectButton />);
+    expect(trySilentReconnect).toHaveBeenCalledTimes(1);
+  });
 });

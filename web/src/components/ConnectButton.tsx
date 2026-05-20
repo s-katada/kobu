@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useConnectionStore } from '../state/connection';
 
 function recoveryHint(errorKind: string): string {
@@ -25,11 +25,18 @@ export function ConnectButton() {
   const disconnect = useConnectionStore((s) => s.disconnect);
   const clearError = useConnectionStore((s) => s.clearError);
 
-  // Reattach to a previously-authorised kobu on first mount, then
-  // again whenever we drop back to idle (e.g. after a USB unplug).
+  // Reattach to a previously-authorised kobu on first mount only.
+  // Re-firing on every `idle` transition would defeat the「切断」
+  // button — the user clicks disconnect, state drops to idle, and we
+  // would silently reconnect again before they could blink. USB
+  // unplug and explicit disconnect both leave the user in idle; they
+  // must click「kobu に接続」(or refresh the page) to come back.
+  const triedReconnect = useRef(false);
   useEffect(() => {
-    if (state.kind === 'idle') void trySilentReconnect();
-  }, [state.kind, trySilentReconnect]);
+    if (triedReconnect.current) return;
+    triedReconnect.current = true;
+    void trySilentReconnect();
+  }, [trySilentReconnect]);
 
   if (state.kind === 'unsupported') {
     return (
