@@ -79,6 +79,8 @@ export function FirmwareSection() {
 function ReleaseCard({ release }: { release: FirmwareRelease }) {
   const central = findAsset(release, 'central.uf2');
   const peripheral = findAsset(release, 'peripheral.uf2');
+  const centralReset = findAsset(release, 'central-reset.uf2');
+  const peripheralReset = findAsset(release, 'peripheral-reset.uf2');
   const published = formatPublishedAt(release.publishedAt);
 
   return (
@@ -109,10 +111,16 @@ function ReleaseCard({ release }: { release: FirmwareRelease }) {
       <p className="text-xs text-zinc-500 dark:text-zinc-400">公開日時: {published}</p>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <AssetPanel label="セントラル (左半分)" asset={central} fallbackName="central.uf2" />
+        <AssetPanel
+          label="セントラル (左半分)"
+          asset={central}
+          resetAsset={centralReset}
+          fallbackName="central.uf2"
+        />
         <AssetPanel
           label="ペリフェラル (右半分)"
           asset={peripheral}
+          resetAsset={peripheralReset}
           fallbackName="peripheral.uf2"
         />
       </div>
@@ -130,10 +138,11 @@ function ReleaseCard({ release }: { release: FirmwareRelease }) {
 interface AssetPanelProps {
   label: string;
   asset: ReturnType<typeof findAsset>;
+  resetAsset?: ReturnType<typeof findAsset>;
   fallbackName: string;
 }
 
-function AssetPanel({ label, asset, fallbackName }: AssetPanelProps) {
+function AssetPanel({ label, asset, resetAsset, fallbackName }: AssetPanelProps) {
   if (!asset) {
     return (
       <div className="rounded-md border border-dashed border-zinc-300 dark:border-zinc-700 p-3 text-xs text-zinc-500 space-y-1">
@@ -145,7 +154,9 @@ function AssetPanel({ label, asset, fallbackName }: AssetPanelProps) {
   return (
     <div className="space-y-2">
       <InstallButton label={label} asset={asset} />
-      <InstallButton label={label} asset={asset} mode="clean" />
+      {resetAsset && (
+        <InstallButton label={label} asset={asset} mode="clean" resetAsset={resetAsset} />
+      )}
       <a
         href={asset.downloadUrl}
         download={asset.name}

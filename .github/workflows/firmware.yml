@@ -54,6 +54,37 @@ jobs:
           cargo hex-to-uf2 --input-path peripheral.hex --output-path peripheral.uf2 --family nrf52840
           EOF
 
+      # Build a second pair of UF2s with `clear_layout = true` in
+      # keyboard.toml's [storage] section. Flashing these once makes
+      # the firmware wipe the user keymap (preserving BLE bonds) on the
+      # next boot. The web installer's "clean install" pairs this with
+      # a second flash of the normal UF2 to leave the device in a
+      # functional state where customisation can persist again.
+      #
+      # We `touch` the source so cargo re-expands the rmk_central /
+      # rmk_peripheral proc-macros that embed keyboard.toml — without
+      # this, the cached macro output would silently keep
+      # clear_layout=false in the produced binary.
+      - name: Build factory-reset central and peripheral
+        run: |
+          nix develop .#firmware --command bash -eux <<'EOF'
+          cd firmware
+          sed -i 's/^clear_layout = false$/clear_layout = true/' keyboard.toml
+          # Verify the swap actually happened so we don't silently ship
+          # an incorrectly-built reset UF2.
+          grep -q '^clear_layout = true$' keyboard.toml
+          touch src/central.rs src/peripheral.rs
+          cargo build --release --bin central
+          cargo build --release --bin peripheral
+          cargo objcopy --release --bin central    -- -O ihex central-reset.hex
+          cargo objcopy --release --bin peripheral -- -O ihex peripheral-reset.hex
+          cargo hex-to-uf2 --input-path central-reset.hex    --output-path central-reset.uf2    --family nrf52840
+          cargo hex-to-uf2 --input-path peripheral-reset.hex --output-path peripheral-reset.uf2 --family nrf52840
+          # Restore the source tree so subsequent steps see a clean
+          # repo. (No-op on ephemeral runners but kept for hygiene.)
+          sed -i 's/^clear_layout = true$/clear_layout = false/' keyboard.toml
+          EOF
+
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
@@ -61,6 +92,8 @@ jobs:
           path: |
             firmware/central.uf2
             firmware/peripheral.uf2
+            firmware/central-reset.uf2
+            firmware/peripheral-reset.uf2
           if-no-files-found: error
 
       # Publish a rolling pre-release tagged `firmware-latest` so the
@@ -83,7 +116,14 @@ jobs:
           - Built:  ${DATE_UTC}
           - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-          \`central.uf2\` をセントラル (左半分) の XIAO BLE、\`peripheral.uf2\` をペリフェラル (右半分) の XIAO BLE にそれぞれ書き込んでください。RESET を 2 連打すると XIAO-BOOT ボリュームが現れます。
+          通常更新: \`central.uf2\` / \`peripheral.uf2\` を対象の XIAO BLE
+          に書き込み (RESET 2 連打 → XIAO-BOOT にドラッグ&ドロップ)。
+          既存のキーマップは保持されます。
+
+          工場出荷状態に戻す: \`*-reset.uf2\` を一度焼くと次回起動時に
+          storage の keymap がクリアされます。続けて通常版を焼き直すと
+          リリース時点のキーマップ + ペアリング情報維持の状態になります
+          (詳細は kobu-config の「クリーンインストール」ボタン)。
           NOTE
           )
           # Delete the previous release (and its moving tag) if present so
@@ -91,6 +131,7 @@ jobs:
           gh release delete firmware-latest --yes --cleanup-tag || true
           gh release create firmware-latest \
             central.uf2 peripheral.uf2 \
+            central-reset.uf2 peripheral-reset.uf2 \
             --title "Latest firmware build ($SHA_SHORT)" \
             --notes "$NOTES" \
             --prerelease \

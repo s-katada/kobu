@@ -2,19 +2,26 @@
  * Self-contained install flow for one UF2 asset.
  *
  * Two modes:
- *   * `preserve` (default) — physical RESET → pick XIAO-BOOT → write uf2.
- *     Existing on-device keymap (stored in RMK's storage region) is
- *     unchanged. Use this for routine firmware updates.
- *   * `clean` — requires kobu to be connected over Vial first. Sends
- *     `DynamicKeymapReset` (Via 0x06) to wipe the user keymap (BLE
- *     bonds survive), then continues with the normal install flow.
- *     Use this to roll back to the firmware's build-time defaults.
  *
- * Order is deliberate: reset BEFORE flashing so that when the new
- * firmware boots it sees an empty storage region and loads its own
- * defaults. Flashing first then resetting would leave the device
- * running on possibly-incompatible old storage data until the user
- * reconnects.
+ *   * `preserve` (default) — single-stage. Physical RESET → pick
+ *     XIAO-BOOT → write the normal `*.uf2`. RMK's storage region is
+ *     untouched, so the user's customised keymap survives the update.
+ *
+ *   * `clean` — two-stage. RMK 0.8 doesn't implement the Via
+ *     DynamicKeymapReset command (the handler is a no-op), so we
+ *     can't wipe the keymap via the wire protocol. Instead we ship a
+ *     second build of the firmware with `clear_layout = true` in
+ *     keyboard.toml's [storage] section. The flow is:
+ *
+ *       Stage 1: flash `*-reset.uf2`. On boot the firmware clears the
+ *                layout region (BLE bonds survive) and continues to
+ *                run normally — but every subsequent boot would
+ *                clear the layout again, so we must …
+ *       Stage 2: flash the normal `*.uf2`. The device now boots with
+ *                an empty storage and the build-time default keymap
+ *                from keyboard.toml; future customisations persist.
+ *
+ *     The user does a manual RESET 2-tap between stages.
  *
  * Chromium 系で File System Access API が無い場合は導線を畳んで
  * 「uf2 をダウンロード」リンクへの案内に切り替える。
@@ -28,8 +35,6 @@ import {
   writeUf2,
 } from '../install/filesystem';
 import { fetchUf2, verifyXiaoBootDirectory } from '../install/install';
-import { resetKeymap } from '../protocol/keymap';
-import { useConnectionStore } from '../state/connection';
 import type { FirmwareAsset } from '../state/firmware';
 
 export type InstallMode = 'preserve' | 'clean';
@@ -37,86 +42,89 @@ export type InstallMode = 'preserve' | 'clean';
 export interface InstallButtonProps {
   /** UI label, e.g. "セントラル (左半分)". */
   label: string;
-  /** Release asset (download URL + filename). */
+  /** Normal firmware asset (download URL + filename). */
   asset: FirmwareAsset;
   /**
-   * `preserve` (default) — flash firmware, keep user keymap.
-   * `clean` — wipe storage via DynamicKeymapReset then flash.
+   * `preserve` (default) — flash the normal uf2, keep user keymap.
+   * `clean` — first flash `resetAsset`, then flash `asset`.
    */
   mode?: InstallMode;
+  /**
+   * Required when `mode === 'clean'`: the `*-reset.uf2` variant that
+   * flips `clear_layout = true`. If omitted on a clean install, the
+   * UI surfaces an error explaining the missing asset.
+   */
+  resetAsset?: FirmwareAsset;
 }
+
+type Stage = 'reset' | 'normal';
 
 type Phase =
   | { kind: 'idle' }
-  | { kind: 'awaiting-reset-confirm' } // clean mode only — pre-flash reset confirmation
-  | { kind: 'resetting' } // clean mode only — sending DynamicKeymapReset
-  | { kind: 'awaiting-physical-reset' } // both modes — user has to RESET 2-tap
-  | { kind: 'picking' }
-  | { kind: 'verifying'; dir: FileSystemDirectoryHandle }
-  | { kind: 'fetching'; dir: FileSystemDirectoryHandle }
-  | { kind: 'writing'; dir: FileSystemDirectoryHandle }
+  | { kind: 'awaiting-physical-reset'; stage: Stage } // user has to RESET 2-tap
+  | { kind: 'picking'; stage: Stage }
+  | { kind: 'verifying'; stage: Stage; dir: FileSystemDirectoryHandle }
+  | { kind: 'fetching'; stage: Stage; dir: FileSystemDirectoryHandle }
+  | { kind: 'writing'; stage: Stage; dir: FileSystemDirectoryHandle }
+  | { kind: 'stage1-done' } // clean mode only — between reset and normal flash
   | { kind: 'done' }
-  | { kind: 'error'; message: string; resumeFrom: Phase['kind'] };
+  | { kind: 'error'; message: string; resumeStage: Stage };
 
-export function InstallButton({ label, asset, mode = 'preserve' }: InstallButtonProps) {
+export function InstallButton({ label, asset, mode = 'preserve', resetAsset }: InstallButtonProps) {
   const supported = isFileSystemAccessSupported();
-  const connection = useConnectionStore((s) => s.state);
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
 
   const close = useCallback(() => setPhase({ kind: 'idle' }), []);
 
-  const startWizard = () => {
-    if (mode === 'clean') {
-      setPhase({ kind: 'awaiting-reset-confirm' });
-    } else {
-      setPhase({ kind: 'awaiting-physical-reset' });
-    }
-  };
+  // The clean flow ships TWO writes; pick which asset belongs to which
+  // stage so the rest of the wizard can stay stage-agnostic.
+  const assetForStage = (stage: Stage): FirmwareAsset | undefined =>
+    stage === 'reset' ? resetAsset : asset;
 
-  const runReset = async () => {
-    if (connection.kind !== 'ready') {
+  const startWizard = () => {
+    if (mode === 'clean' && !resetAsset) {
       setPhase({
         kind: 'error',
         message:
-          'クリーンインストールには kobu との接続が必要です。先に上の「接続」パネルから接続してください。',
-        resumeFrom: 'awaiting-reset-confirm',
+          'リセット用ファームウェア (*-reset.uf2) がリリースに含まれていません。ワークフローが最新ビルドを公開するまで通常インストールをお使いください。',
+        resumeStage: 'reset',
       });
       return;
     }
-    setPhase({ kind: 'resetting' });
-    try {
-      await resetKeymap(connection.transport);
-    } catch (err) {
-      setPhase({
-        kind: 'error',
-        message: `キーマップのリセットに失敗しました: ${err instanceof Error ? err.message : String(err)}`,
-        resumeFrom: 'awaiting-reset-confirm',
-      });
-      return;
-    }
-    setPhase({ kind: 'awaiting-physical-reset' });
+    const firstStage: Stage = mode === 'clean' ? 'reset' : 'normal';
+    setPhase({ kind: 'awaiting-physical-reset', stage: firstStage });
   };
 
-  const pickAndWrite = async (skipVerify = false) => {
+  const pickAndWrite = async (stage: Stage, skipVerify = false) => {
+    const stageAsset = assetForStage(stage);
+    if (!stageAsset) {
+      setPhase({
+        kind: 'error',
+        message: 'インストール対象の uf2 が見つかりません。',
+        resumeStage: stage,
+      });
+      return;
+    }
+
     let dir: FileSystemDirectoryHandle;
-    setPhase({ kind: 'picking' });
+    setPhase({ kind: 'picking', stage });
     try {
       dir = await pickXiaoBoot();
     } catch (err) {
       if (err instanceof InstallError && err.kind === 'picker-cancelled') {
-        setPhase({ kind: 'awaiting-physical-reset' });
+        setPhase({ kind: 'awaiting-physical-reset', stage });
         return;
       }
       setPhase({
         kind: 'error',
         message: err instanceof Error ? err.message : String(err),
-        resumeFrom: 'awaiting-physical-reset',
+        resumeStage: stage,
       });
       return;
     }
 
     if (!skipVerify) {
-      setPhase({ kind: 'verifying', dir });
+      setPhase({ kind: 'verifying', stage, dir });
       try {
         const info = await verifyXiaoBootDirectory(dir);
         if (info === null) {
@@ -124,7 +132,7 @@ export function InstallButton({ label, asset, mode = 'preserve' }: InstallButton
             '選択したフォルダに INFO_UF2.TXT が見つかりません。XIAO-BOOT ではない可能性があります。続行しますか？',
           );
           if (!proceed) {
-            setPhase({ kind: 'awaiting-physical-reset' });
+            setPhase({ kind: 'awaiting-physical-reset', stage });
             return;
           }
         }
@@ -132,34 +140,38 @@ export function InstallButton({ label, asset, mode = 'preserve' }: InstallButton
         setPhase({
           kind: 'error',
           message: `XIAO-BOOT の確認に失敗しました: ${err instanceof Error ? err.message : String(err)}`,
-          resumeFrom: 'awaiting-physical-reset',
+          resumeStage: stage,
         });
         return;
       }
     }
 
-    setPhase({ kind: 'fetching', dir });
+    setPhase({ kind: 'fetching', stage, dir });
     let bytes: Uint8Array;
     try {
-      bytes = await fetchUf2(asset.downloadUrl);
+      bytes = await fetchUf2(stageAsset.downloadUrl);
     } catch (err) {
       setPhase({
         kind: 'error',
         message: err instanceof Error ? err.message : String(err),
-        resumeFrom: 'awaiting-physical-reset',
+        resumeStage: stage,
       });
       return;
     }
 
-    setPhase({ kind: 'writing', dir });
+    setPhase({ kind: 'writing', stage, dir });
     try {
-      await writeUf2(dir, asset.name, bytes);
-      setPhase({ kind: 'done' });
+      await writeUf2(dir, stageAsset.name, bytes);
+      if (mode === 'clean' && stage === 'reset') {
+        setPhase({ kind: 'stage1-done' });
+      } else {
+        setPhase({ kind: 'done' });
+      }
     } catch (err) {
       setPhase({
         kind: 'error',
         message: err instanceof Error ? err.message : String(err),
-        resumeFrom: 'awaiting-physical-reset',
+        resumeStage: stage,
       });
     }
   };
@@ -211,41 +223,12 @@ export function InstallButton({ label, asset, mode = 'preserve' }: InstallButton
         </button>
       </header>
 
-      {phase.kind === 'awaiting-reset-confirm' && (
-        <div className="space-y-2 text-xs text-zinc-700 dark:text-zinc-300">
-          <p>
-            現在のキーマップを <strong>工場出荷状態に戻し</strong>
-            、続けてファームウェアを再インストールします。BLE のペアリング情報は保持されます。
-          </p>
-          <p>
-            {connection.kind === 'ready'
-              ? '接続中の kobu に対してリセットを送信します。'
-              : 'クリーンインストールには kobu の接続が必要です。先に上の「接続」パネルから接続してください。'}
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              void runReset();
-            }}
-            disabled={connection.kind !== 'ready'}
-            className="rounded-md bg-amber-600 hover:bg-amber-500 text-white px-3 py-1.5 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            リセットを実行
-          </button>
-        </div>
-      )}
-
-      {phase.kind === 'resetting' && (
-        <p className="text-xs text-zinc-700 dark:text-zinc-300">キーマップをリセット中…</p>
+      {mode === 'clean' && (
+        <p className="text-xs text-zinc-600 dark:text-zinc-400">{stageBanner(phase)}</p>
       )}
 
       {phase.kind === 'awaiting-physical-reset' && (
         <div className="space-y-2">
-          {mode === 'clean' && (
-            <p className="text-xs text-emerald-700 dark:text-emerald-400">
-              ✓ キーマップを工場出荷状態にリセットしました。
-            </p>
-          )}
           <ol className="list-decimal list-inside text-xs text-zinc-700 dark:text-zinc-300 space-y-1">
             <li>{label}の XIAO BLE を USB-C で接続</li>
             <li>RESET ボタンを素早く 2 回押す</li>
@@ -257,11 +240,11 @@ export function InstallButton({ label, asset, mode = 'preserve' }: InstallButton
           <button
             type="button"
             onClick={() => {
-              void pickAndWrite();
+              void pickAndWrite(phase.stage);
             }}
             className="rounded-md bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 text-xs font-medium"
           >
-            XIAO-BOOT を選択して書き込み
+            XIAO-BOOT を選択して{phase.stage === 'reset' ? 'リセット uf2 を' : 'uf2 を'}書き込み
           </button>
         </div>
       )}
@@ -273,6 +256,25 @@ export function InstallButton({ label, asset, mode = 'preserve' }: InstallButton
         <p className="text-xs text-zinc-700 dark:text-zinc-300">{phaseLabel(phase.kind)}</p>
       )}
 
+      {phase.kind === 'stage1-done' && (
+        <div className="space-y-2">
+          <p className="text-xs text-emerald-700 dark:text-emerald-400">
+            ✓ ステップ 1/2 完了: リセット uf2 を書き込みました。XIAO が再起動し、keymap が
+            工場出荷状態にクリアされます。
+          </p>
+          <p className="text-xs text-zinc-700 dark:text-zinc-300">
+            続けて通常版を書き込みます。再度 RESET を 2 連打して XIAO-BOOT を出してください。
+          </p>
+          <button
+            type="button"
+            onClick={() => setPhase({ kind: 'awaiting-physical-reset', stage: 'normal' })}
+            className="rounded-md bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1.5 text-xs font-medium"
+          >
+            次へ (通常 uf2 のインストール)
+          </button>
+        </div>
+      )}
+
       {phase.kind === 'done' && (
         <div className="space-y-2">
           <p className="text-xs text-emerald-700 dark:text-emerald-400">
@@ -280,7 +282,7 @@ export function InstallButton({ label, asset, mode = 'preserve' }: InstallButton
             {mode === 'clean' && (
               <>
                 <br />
-                工場出荷時のキーマップで起動します。
+                工場出荷時のキーマップで起動します。BLE のペアリング情報は維持されています。
               </>
             )}
           </p>
@@ -299,7 +301,7 @@ export function InstallButton({ label, asset, mode = 'preserve' }: InstallButton
           <p className="text-xs text-rose-700 dark:text-rose-400">エラー: {phase.message}</p>
           <button
             type="button"
-            onClick={() => setPhase({ kind: phase.resumeFrom } as Phase)}
+            onClick={() => setPhase({ kind: 'awaiting-physical-reset', stage: phase.resumeStage })}
             className="rounded-md border border-zinc-300 dark:border-zinc-700 px-3 py-1.5 text-xs hover:bg-zinc-100 dark:hover:bg-zinc-900"
           >
             やり直す
@@ -314,6 +316,23 @@ function primaryLabel(label: string, mode: InstallMode): string {
   return mode === 'clean'
     ? `${label}を工場出荷状態に戻して再インストール`
     : `${label}をインストール`;
+}
+
+function stageBanner(phase: Phase): string {
+  if (phase.kind === 'stage1-done') return 'ステップ 1/2 完了 → ステップ 2/2 へ';
+  if (phase.kind === 'done') return '完了';
+  if (phase.kind === 'error') {
+    return phase.resumeStage === 'reset' ? 'ステップ 1/2: リセット uf2' : 'ステップ 2/2: 通常 uf2';
+  }
+  const stage =
+    phase.kind === 'awaiting-physical-reset' ||
+    phase.kind === 'picking' ||
+    phase.kind === 'verifying' ||
+    phase.kind === 'fetching' ||
+    phase.kind === 'writing'
+      ? phase.stage
+      : 'reset';
+  return stage === 'reset' ? 'ステップ 1/2: リセット uf2' : 'ステップ 2/2: 通常 uf2';
 }
 
 function phaseLabel(kind: 'picking' | 'verifying' | 'fetching' | 'writing'): string {

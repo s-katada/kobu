@@ -209,53 +209,35 @@ describe('InstallButton', () => {
 });
 
 /**
- * `mode='clean'` adds a pre-flash DynamicKeymapReset step. We swap the
- * connection store between connected/disconnected and stub the
- * transport to control the reset outcome.
+ * `mode='clean'` is a two-stage flash: reset uf2 first (clears storage
+ * on boot), then normal uf2 (so further customisations persist). No
+ * Vial connection needed.
  */
 describe('InstallButton (clean mode)', () => {
-  beforeEach(async () => {
+  const RESET_ASSET: FirmwareAsset = {
+    name: 'central-reset.uf2',
+    size: 902656,
+    downloadUrl: 'https://example.com/central-reset.uf2',
+  };
+
+  beforeEach(() => {
     originalShowDirectoryPicker = W.showDirectoryPicker;
     originalConfirm = W.confirm;
     setShowDirectoryPicker(vi.fn());
     vi.stubGlobal('fetch', vi.fn());
-    const { useConnectionStore } = await import('../state/connection');
-    useConnectionStore.setState({ state: { kind: 'idle' } });
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     setShowDirectoryPicker(originalShowDirectoryPicker ?? null);
     W.confirm = originalConfirm;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    const { useConnectionStore } = await import('../state/connection');
-    useConnectionStore.setState({ state: { kind: 'idle' } });
   });
 
-  async function primeReady(sendAndReceive: ReturnType<typeof vi.fn>) {
-    const { useConnectionStore } = await import('../state/connection');
-    useConnectionStore.setState({
-      state: {
-        kind: 'ready',
-        transport: { sendAndReceive } as never,
-        handshake: {
-          viaProtocolVersion: 0x0009,
-          keyboardId: {
-            vialProtocolVersion: 6,
-            uid: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
-            featureFlags: 0,
-          },
-          definition: { matrix: { rows: 4, cols: 10 }, layouts: { keymap: [] } },
-          isKobu: true,
-        },
-        deviceName: 'kobu',
-        definitionFromCache: false,
-      },
-    });
-  }
-
-  it('shows a different label for clean mode', () => {
-    render(<InstallButton label="セントラル" asset={ASSET} mode="clean" />);
+  it('renders a label that mentions 工場出荷状態', () => {
+    render(
+      <InstallButton label="セントラル" asset={ASSET} mode="clean" resetAsset={RESET_ASSET} />,
+    );
     expect(
       screen.getByRole('button', {
         name: 'セントラルを工場出荷状態に戻して再インストール',
@@ -263,85 +245,103 @@ describe('InstallButton (clean mode)', () => {
     ).toBeInTheDocument();
   });
 
-  it('shows the reset-confirm step when the wizard opens in clean mode', async () => {
+  it('surfaces an error when resetAsset is missing on a clean install', async () => {
     render(<InstallButton label="セントラル" asset={ASSET} mode="clean" />);
     await userEvent.click(
       screen.getByRole('button', { name: /工場出荷状態に戻して再インストール/ }),
     );
-    expect(screen.getByRole('button', { name: 'リセットを実行' })).toBeInTheDocument();
+    expect(screen.getByText(/リセット用ファームウェア/)).toBeInTheDocument();
   });
 
-  it('disables the reset action when kobu is not connected', async () => {
-    render(<InstallButton label="セントラル" asset={ASSET} mode="clean" />);
+  it('opens the wizard at stage 1 (リセット uf2)', async () => {
+    render(
+      <InstallButton label="セントラル" asset={ASSET} mode="clean" resetAsset={RESET_ASSET} />,
+    );
     await userEvent.click(
       screen.getByRole('button', { name: /工場出荷状態に戻して再インストール/ }),
     );
-    expect(screen.getByRole('button', { name: 'リセットを実行' })).toBeDisabled();
-    expect(screen.getByText(/先に上の「接続」パネルから接続/)).toBeInTheDocument();
+    expect(screen.getByText(/ステップ 1\/2: リセット uf2/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /リセット uf2 を書き込み/ })).toBeInTheDocument();
   });
 
-  it('sends DynamicKeymapReset (Via 0x06) when connected, then advances to the physical-RESET step', async () => {
-    const sendAndReceive = vi.fn(async () => new Uint8Array(new ArrayBuffer(32)));
-    await primeReady(sendAndReceive);
+  it('stage 1 writes central-reset.uf2 and prompts the user to continue to stage 2', async () => {
+    const { handle, writes } = makeFakeXiaoBoot({ withInfo: true });
+    setShowDirectoryPicker(vi.fn(async () => handle));
+    stubFetchOk([0x00, 0x01]);
 
-    render(<InstallButton label="セントラル" asset={ASSET} mode="clean" />);
+    render(
+      <InstallButton label="セントラル" asset={ASSET} mode="clean" resetAsset={RESET_ASSET} />,
+    );
     await userEvent.click(
       screen.getByRole('button', { name: /工場出荷状態に戻して再インストール/ }),
     );
-    await userEvent.click(screen.getByRole('button', { name: 'リセットを実行' }));
+    await userEvent.click(screen.getByRole('button', { name: /リセット uf2 を書き込み/ }));
 
     await waitFor(() =>
-      expect(screen.getByText(/キーマップを工場出荷状態にリセットしました/)).toBeInTheDocument(),
+      expect(screen.getAllByText(/ステップ 1\/2 完了/).length).toBeGreaterThan(0),
     );
-    expect(sendAndReceive).toHaveBeenCalledTimes(1);
-    const firstCall = sendAndReceive.mock.calls[0] as unknown as [Uint8Array] | undefined;
-    expect(firstCall?.[0]?.[0]).toBe(0x06);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.name).toBe('central-reset.uf2');
     expect(
-      screen.getByRole('button', { name: /XIAO-BOOT を選択して書き込み/ }),
+      screen.getByRole('button', { name: /次へ \(通常 uf2 のインストール\)/ }),
     ).toBeInTheDocument();
   });
 
-  it('completes the full clean install: reset → pick → fetch → write → done', async () => {
-    const sendAndReceive = vi.fn(async () => new Uint8Array(new ArrayBuffer(32)));
-    await primeReady(sendAndReceive);
+  it('full clean flow: stage 1 → next → stage 2 → done writes both uf2s', async () => {
     const { handle, writes } = makeFakeXiaoBoot({ withInfo: true });
     setShowDirectoryPicker(vi.fn(async () => handle));
-    stubFetchOk([1, 2, 3, 4]);
+    stubFetchOk([0xab, 0xcd]);
 
-    render(<InstallButton label="セントラル" asset={ASSET} mode="clean" />);
+    render(
+      <InstallButton label="セントラル" asset={ASSET} mode="clean" resetAsset={RESET_ASSET} />,
+    );
     await userEvent.click(
       screen.getByRole('button', { name: /工場出荷状態に戻して再インストール/ }),
     );
-    await userEvent.click(screen.getByRole('button', { name: 'リセットを実行' }));
+    // Stage 1
+    await userEvent.click(screen.getByRole('button', { name: /リセット uf2 を書き込み/ }));
     await waitFor(() =>
-      expect(
-        screen.getByRole('button', { name: /XIAO-BOOT を選択して書き込み/ }),
-      ).toBeInTheDocument(),
+      expect(screen.getAllByText(/ステップ 1\/2 完了/).length).toBeGreaterThan(0),
     );
-    await userEvent.click(screen.getByRole('button', { name: /XIAO-BOOT を選択して書き込み/ }));
+    await userEvent.click(screen.getByRole('button', { name: /次へ \(通常 uf2 のインストール\)/ }));
+
+    // Stage 2
+    expect(screen.getByText(/ステップ 2\/2/)).toBeInTheDocument();
+    // Stage 2 button: "XIAO-BOOT を選択してuf2 を書き込み" (no leading 'リセット')
+    const stage2Button = screen
+      .getAllByRole('button')
+      .find((b) => b.textContent === 'XIAO-BOOT を選択してuf2 を書き込み');
+    if (!stage2Button) throw new Error('stage 2 button not found');
+    await userEvent.click(stage2Button);
 
     await waitFor(() =>
       expect(screen.getByText(/工場出荷時のキーマップで起動します/)).toBeInTheDocument(),
     );
-    expect(writes).toHaveLength(1);
-    expect(writes[0]?.name).toBe('central.uf2');
+    expect(writes.map((w) => w.name)).toEqual(['central-reset.uf2', 'central.uf2']);
   });
 
-  it('surfaces an error and offers retry when reset fails', async () => {
-    const sendAndReceive = vi.fn(async () => {
-      throw new Error('lock active');
-    });
-    await primeReady(sendAndReceive);
+  it('surfaces an error and lets the user retry stage 1 when reset uf2 write fails', async () => {
+    const { handle } = makeFakeXiaoBoot({ withInfo: true });
+    setShowDirectoryPicker(vi.fn(async () => handle));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+        arrayBuffer: async () => new ArrayBuffer(0),
+      })),
+    );
 
-    render(<InstallButton label="セントラル" asset={ASSET} mode="clean" />);
+    render(
+      <InstallButton label="セントラル" asset={ASSET} mode="clean" resetAsset={RESET_ASSET} />,
+    );
     await userEvent.click(
       screen.getByRole('button', { name: /工場出荷状態に戻して再インストール/ }),
     );
-    await userEvent.click(screen.getByRole('button', { name: 'リセットを実行' }));
+    await userEvent.click(screen.getByRole('button', { name: /リセット uf2 を書き込み/ }));
 
-    await waitFor(() =>
-      expect(screen.getByText(/キーマップのリセットに失敗しました/)).toBeInTheDocument(),
-    );
+    await waitFor(() => expect(screen.getByText(/エラー:/)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'やり直す' })).toBeInTheDocument();
   });
 });
