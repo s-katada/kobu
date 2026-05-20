@@ -56,6 +56,32 @@ describe('buildCells', () => {
     expect(cells.find((c) => c.row === 3 && c.col === 5)?.x).toBe(9);
   });
 
+  it('snapToCol ignores the `{x:N}` indents and aligns by column index even on the legacy {x:3}/{x:0} layout', () => {
+    const legacyLayout: ReadonlyArray<ReadonlyArray<LayoutEntry>> = [
+      ['0,0', '0,1', '0,2', '0,3', '0,4', { x: 1 }, '0,5', '0,6', '0,7', '0,8', '0,9'],
+      ['1,0', '1,1', '1,2', '1,3', '1,4', { x: 1 }, '1,5', '1,6', '1,7', '1,8', '1,9'],
+      ['2,0', '2,1', '2,2', '2,3', '2,4', { x: 1 }, '2,5', '2,6', '2,7', '2,8', '2,9'],
+      [{ x: 3 }, '3,1', '3,2', '3,3', '3,4', { x: 0 }, '3,5', '3,6', '3,7', '3,8'],
+    ];
+    const cells = buildCells(legacyLayout, { midCol: 5, snapToCol: true });
+    const get = (r: number, c: number) => cells.find((x) => x.row === r && x.col === c)?.x;
+
+    // Thumb cols 1..4 land at x=1..4, matching letter row col indices.
+    expect(get(3, 1)).toBe(1);
+    expect(get(3, 2)).toBe(2);
+    expect(get(3, 3)).toBe(3);
+    expect(get(3, 4)).toBe(4);
+    // Right half: col + midGap (=1) = 6, 7, 8, 9.
+    expect(get(3, 5)).toBe(6);
+    expect(get(3, 6)).toBe(7);
+    expect(get(3, 7)).toBe(8);
+    expect(get(3, 8)).toBe(9);
+    // Letter row positions match too — vial.json {x:1} between halves
+    // happens to coincide with snap output.
+    expect(get(0, 1)).toBe(1);
+    expect(get(0, 5)).toBe(6);
+  });
+
   it('the production thumb-row layout {x:1}+{x:1} aligns each thumb under its same-col letter', () => {
     // This is the layout shipped in firmware/vial.json after commit
     // 4a21152 — once the user flashes the corresponding central.uf2
