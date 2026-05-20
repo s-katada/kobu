@@ -121,14 +121,24 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => {
         });
         return;
       }
-      // Replace the freshly-fetched definition with the cached copy if
-      // it matches (avoids burning the round trips on subsequent loads).
+      // Replace the freshly-fetched definition with the cached copy
+      // ONLY when its content matches byte-for-byte. The previous
+      // logic blindly preferred whatever cached entry existed for a
+      // given UID, so re-flashing firmware with an updated vial.json
+      // (same UID, different layout) silently kept showing the stale
+      // layout in the editor until the user nuked localStorage. We
+      // detect the mismatch by JSON-serialising both definitions and
+      // refresh the cache when they diverge.
       const cached = loadCachedDefinition(handshake.keyboardId.uid);
-      const definitionFromCache = cached !== null;
-      const handshakeMaybeCached: HandshakeResult = cached
-        ? { ...handshake, definition: cached }
+      const cachedMatchesFresh =
+        cached !== null && JSON.stringify(cached) === JSON.stringify(handshake.definition);
+      const definitionFromCache = cachedMatchesFresh;
+      const handshakeMaybeCached: HandshakeResult = cachedMatchesFresh
+        ? { ...handshake, definition: cached as typeof handshake.definition }
         : handshake;
-      if (!cached) saveCachedDefinition(handshake.keyboardId.uid, handshake.definition);
+      if (!cachedMatchesFresh) {
+        saveCachedDefinition(handshake.keyboardId.uid, handshake.definition);
+      }
 
       set({
         state: {

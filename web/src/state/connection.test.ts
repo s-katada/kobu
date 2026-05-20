@@ -195,6 +195,37 @@ describe('useConnectionStore', () => {
     expect(useConnectionStore.getState().state.kind).toBe('idle');
   });
 
+  it('cached definition is auto-replaced when fresh handshake differs (firmware re-flash with new vial.json)', async () => {
+    // 1st connect saves a definition to the cache.
+    const device = createMockDevice();
+    fakeHid.requestDevice.mockResolvedValueOnce([device]);
+    mockPerformHandshake.mockResolvedValueOnce(fakeHandshakeResult());
+    await useConnectionStore.getState().promptConnect();
+    await useConnectionStore.getState().disconnect();
+
+    // 2nd connect — handshake returns a DIFFERENT definition (e.g. an
+    // updated vial.json embedded in newly-flashed firmware). The
+    // connectTo helper must prefer the fresh definition and update
+    // the cache, otherwise the user sees the stale layout indefinitely.
+    fakeHid.requestDevice.mockResolvedValueOnce([device]);
+    mockPerformHandshake.mockResolvedValueOnce(
+      fakeHandshakeResult({
+        definition: {
+          matrix: { rows: 4, cols: 10 },
+          layouts: { keymap: [['changed,0']] },
+        },
+      }),
+    );
+    await useConnectionStore.getState().promptConnect();
+
+    const state = useConnectionStore.getState().state;
+    expect(state.kind).toBe('ready');
+    if (state.kind === 'ready') {
+      expect(state.definitionFromCache).toBe(false);
+      expect(state.handshake.definition.layouts.keymap).toEqual([['changed,0']]);
+    }
+  });
+
   it('second connect uses the cached definition', async () => {
     const device = createMockDevice();
     fakeHid.requestDevice.mockResolvedValueOnce([device]);
