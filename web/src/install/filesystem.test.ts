@@ -179,6 +179,26 @@ describe('writeUf2', () => {
     await expect(writeUf2(baseDir, 'central.uf2', new Uint8Array([1]))).resolves.toBeUndefined();
   });
 
+  it('swallows Safe Browsing failures during close (bootloader rebooted mid-scan)', async () => {
+    writable = makeWritable({
+      closeError: new DOMException('Failed to perform Safe Browsing check.', 'AbortError'),
+    });
+    const handle = makeFileHandle(writable);
+    baseDir = {
+      getFileHandle: vi.fn(async () => handle),
+    } as unknown as FileSystemDirectoryHandle;
+    await expect(writeUf2(baseDir, 'central.uf2', new Uint8Array([1]))).resolves.toBeUndefined();
+  });
+
+  it('also swallows close errors that mention Safe Browsing on a non-DOMException', async () => {
+    writable = makeWritable({ closeError: new Error('Failed to perform Safe Browsing check.') });
+    const handle = makeFileHandle(writable);
+    baseDir = {
+      getFileHandle: vi.fn(async () => handle),
+    } as unknown as FileSystemDirectoryHandle;
+    await expect(writeUf2(baseDir, 'central.uf2', new Uint8Array([1]))).resolves.toBeUndefined();
+  });
+
   it('wraps non-disconnect write errors in InstallError(write-failed)', async () => {
     writable = makeWritable({ writeError: new TypeError('boom') });
     const handle = makeFileHandle(writable);

@@ -166,6 +166,7 @@ export async function writeUf2(
     await writable.close();
   } catch (err) {
     if (looksLikeDeviceDisappeared(err)) return;
+    if (isPostWriteCheckFailure(err)) return;
     throw new InstallError('write-failed', `書き込みの完了処理に失敗しました: ${describe(err)}`);
   }
 }
@@ -177,6 +178,28 @@ function looksLikeDeviceDisappeared(err: unknown): boolean {
   return (
     err.name === 'InvalidStateError' || err.name === 'NotFoundError' || err.name === 'NetworkError'
   );
+}
+
+/**
+ * After `writable.write(bytes)` returns the bytes are already on disk;
+ * `close()` then flushes and runs Chrome's Safe Browsing scan. When the
+ * UF2 bootloader consumes the file and reboots mid-scan, the scan can
+ * fail with messages like "Failed to perform Safe Browsing check." We
+ * treat that as success because the firmware update has actually
+ * landed — the close() just couldn't finish its post-write hygiene.
+ */
+function isPostWriteCheckFailure(err: unknown): boolean {
+  // Duck-type rather than `instanceof Error` — jsdom's DOMException is
+  // not an Error subclass, and we want to catch it in tests too.
+  const message =
+    typeof err === 'object' && err !== null && 'message' in err
+      ? String((err as { message: unknown }).message)
+      : '';
+  if (/safe browsing/i.test(message)) return true;
+  // Chrome also surfaces some quarantine failures as AbortError without
+  // a more descriptive message; treat those the same way.
+  if (err instanceof DOMException && err.name === 'AbortError') return true;
+  return false;
 }
 
 function describe(err: unknown): string {
