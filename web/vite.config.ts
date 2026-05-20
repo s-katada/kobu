@@ -15,5 +15,16 @@ export default defineConfig({
     // nixpkgs sources, etc.) underneath it and they contain their
     // own tests we definitely do not want to run.
     exclude: ['**/node_modules/**', '**/dist/**', '**/.direnv/**'],
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'html'],
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: [
+        'src/main.tsx', // bootstrap only
+        'src/test/**',
+        'src/**/*.d.ts',
+        'src/**/*.test.{ts,tsx}',
+      ],
+    },
   },
 });
