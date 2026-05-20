@@ -16,6 +16,9 @@ on:
       - ".github/workflows/firmware.yml"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build UF2
@@ -59,3 +62,36 @@ jobs:
             firmware/central.uf2
             firmware/peripheral.uf2
           if-no-files-found: error
+
+      # Publish a rolling pre-release tagged `firmware-latest` so the
+      # kobu-config web app can fetch the latest UF2 over the public
+      # Releases API (no auth needed for public repos). Tag and assets
+      # are recreated on every successful main build.
+      - name: Publish firmware-latest pre-release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euxo pipefail
+          cd firmware
+          SHA_SHORT=$(git rev-parse --short HEAD)
+          DATE_UTC=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          NOTES=$(cat <<NOTE
+          自動ビルドされた最新版です。
+
+          - Commit: \`${{ github.sha }}\`
+          - Built:  ${DATE_UTC}
+          - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          \`central.uf2\` をセントラル (左半分) の XIAO BLE、\`peripheral.uf2\` をペリフェラル (右半分) の XIAO BLE にそれぞれ書き込んでください。RESET を 2 連打すると XIAO-BOOT ボリュームが現れます。
+          NOTE
+          )
+          # Delete the previous release (and its moving tag) if present so
+          # the next `gh release create` doesn't conflict.
+          gh release delete firmware-latest --yes --cleanup-tag || true
+          gh release create firmware-latest \
+            central.uf2 peripheral.uf2 \
+            --title "Latest firmware build ($SHA_SHORT)" \
+            --notes "$NOTES" \
+            --prerelease \
+            --target "$GITHUB_SHA"
