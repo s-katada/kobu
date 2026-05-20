@@ -33,12 +33,27 @@ export function rewriteForDevProxy(downloadUrl: string): string {
 }
 
 /**
- * Fetch a UF2 release asset and return its bytes. Rejects with
- * `InstallError('write-failed', ...)` when the HTTP response is not
- * 2xx — using the same error kind keeps the UI layer's switch
- * statement small.
+ * Reports streaming download progress.
+ *
+ * `total` is `null` when the server didn't send Content-Length (e.g.
+ * the response is chunked through the dev proxy). The UI shows a
+ * by-bytes counter without a percentage in that case.
  */
-export async function fetchUf2(downloadUrl: string): Promise<Uint8Array> {
+export type FetchProgress = (loaded: number, total: number | null) => void;
+
+/**
+ * Fetch a UF2 release asset and return its bytes. Streams the body
+ * via `response.body.getReader()` so the UI can render a progress
+ * bar: `onProgress(loaded, total)` is called after every chunk.
+ *
+ * Rejects with `InstallError('write-failed', ...)` when the HTTP
+ * response is not 2xx — using the same error kind keeps the UI
+ * layer's switch statement small.
+ */
+export async function fetchUf2(
+  downloadUrl: string,
+  onProgress?: FetchProgress,
+): Promise<Uint8Array> {
   const url = rewriteForDevProxy(downloadUrl);
   let res: Response;
   try {
@@ -55,8 +70,40 @@ export async function fetchUf2(downloadUrl: string): Promise<Uint8Array> {
       `uf2 のダウンロードに失敗しました: HTTP ${res.status} ${res.statusText}`,
     );
   }
-  const buf = await res.arrayBuffer();
-  return new Uint8Array(buf);
+
+  const contentLengthHeader = res.headers?.get?.('content-length') ?? null;
+  const total = contentLengthHeader ? Number(contentLengthHeader) : null;
+  // `.body` is null on opaque responses or unusual fetch polyfills; fall
+  // back to arrayBuffer in that case so the install still completes
+  // (we just lose progress granularity).
+  const reader = res.body?.getReader?.();
+  if (!reader) {
+    const buf = await res.arrayBuffer();
+    onProgress?.(buf.byteLength, buf.byteLength);
+    return new Uint8Array(buf);
+  }
+
+  const chunks: Uint8Array[] = [];
+  let loaded = 0;
+  // Surface an initial 0-of-N tick so the bar appears immediately
+  // instead of jumping straight from "0 B" to the first chunk size.
+  onProgress?.(0, total);
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    chunks.push(value);
+    loaded += value.byteLength;
+    onProgress?.(loaded, total);
+  }
+
+  const out = new Uint8Array(loaded);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }
 
 /**
