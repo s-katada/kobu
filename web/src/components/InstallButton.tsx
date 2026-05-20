@@ -64,7 +64,13 @@ type Phase =
   | { kind: 'awaiting-physical-reset'; stage: Stage } // user has to RESET 2-tap
   | { kind: 'picking'; stage: Stage }
   | { kind: 'verifying'; stage: Stage; dir: FileSystemDirectoryHandle }
-  | { kind: 'fetching'; stage: Stage; dir: FileSystemDirectoryHandle }
+  | {
+      kind: 'fetching';
+      stage: Stage;
+      dir: FileSystemDirectoryHandle;
+      loaded: number;
+      total: number | null;
+    }
   | { kind: 'writing'; stage: Stage; dir: FileSystemDirectoryHandle }
   | { kind: 'stage1-done' } // clean mode only — between reset and normal flash
   | { kind: 'done' }
@@ -146,10 +152,12 @@ export function InstallButton({ label, asset, mode = 'preserve', resetAsset }: I
       }
     }
 
-    setPhase({ kind: 'fetching', stage, dir });
+    setPhase({ kind: 'fetching', stage, dir, loaded: 0, total: null });
     let bytes: Uint8Array;
     try {
-      bytes = await fetchUf2(stageAsset.downloadUrl);
+      bytes = await fetchUf2(stageAsset.downloadUrl, (loaded, total) => {
+        setPhase({ kind: 'fetching', stage, dir, loaded, total });
+      });
     } catch (err) {
       setPhase({
         kind: 'error',
@@ -249,11 +257,23 @@ export function InstallButton({ label, asset, mode = 'preserve', resetAsset }: I
         </div>
       )}
 
-      {(phase.kind === 'picking' ||
-        phase.kind === 'verifying' ||
-        phase.kind === 'fetching' ||
-        phase.kind === 'writing') && (
-        <p className="text-xs text-zinc-700 dark:text-zinc-300">{phaseLabel(phase.kind)}</p>
+      {(phase.kind === 'picking' || phase.kind === 'verifying' || phase.kind === 'writing') && (
+        <div className="flex items-center gap-2 text-xs text-zinc-700 dark:text-zinc-300">
+          <Spinner />
+          <span>{phaseLabel(phase.kind)}</span>
+        </div>
+      )}
+
+      {phase.kind === 'fetching' && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-xs text-zinc-700 dark:text-zinc-300">
+            <span>uf2 をダウンロード中…</span>
+            <span className="font-mono tabular-nums">
+              {progressLabel(phase.loaded, phase.total)}
+            </span>
+          </div>
+          <ProgressBar loaded={phase.loaded} total={phase.total} />
+        </div>
       )}
 
       {phase.kind === 'stage1-done' && (
@@ -335,15 +355,64 @@ function stageBanner(phase: Phase): string {
   return stage === 'reset' ? 'ステップ 1/2: リセット uf2' : 'ステップ 2/2: 通常 uf2';
 }
 
-function phaseLabel(kind: 'picking' | 'verifying' | 'fetching' | 'writing'): string {
+function phaseLabel(kind: 'picking' | 'verifying' | 'writing'): string {
   switch (kind) {
     case 'picking':
       return 'XIAO-BOOT を選択してください…';
     case 'verifying':
       return 'XIAO-BOOT を確認中…';
-    case 'fetching':
-      return 'uf2 をダウンロード中…';
     case 'writing':
       return 'XIAO へ書き込み中…';
   }
+}
+
+function Spinner() {
+  return (
+    <span
+      role="status"
+      aria-label="読み込み中"
+      className="inline-block h-3.5 w-3.5 rounded-full border-2 border-emerald-500 border-t-transparent animate-spin"
+    />
+  );
+}
+
+interface ProgressBarProps {
+  loaded: number;
+  total: number | null;
+}
+
+function ProgressBar({ loaded, total }: ProgressBarProps) {
+  const percent = total && total > 0 ? Math.min(100, (loaded / total) * 100) : null;
+  return (
+    <div
+      role="progressbar"
+      aria-valuenow={percent ?? undefined}
+      aria-valuemin={0}
+      aria-valuemax={total ?? undefined}
+      aria-label="ダウンロード進捗"
+      className="w-full h-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden"
+    >
+      {percent !== null ? (
+        <div
+          className="h-full bg-emerald-600 transition-all duration-150"
+          style={{ width: `${percent}%` }}
+        />
+      ) : (
+        // Indeterminate (no Content-Length): pulse a full-width bar so
+        // the user sees that download is in progress.
+        <div className="h-full w-full bg-emerald-600 animate-pulse" />
+      )}
+    </div>
+  );
+}
+
+function progressLabel(loaded: number, total: number | null): string {
+  const fmt = (n: number) => {
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+    return `${(n / 1024 / 1024).toFixed(2)} MB`;
+  };
+  if (total === null) return fmt(loaded);
+  const pct = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
+  return `${fmt(loaded)} / ${fmt(total)} (${pct}%)`;
 }
