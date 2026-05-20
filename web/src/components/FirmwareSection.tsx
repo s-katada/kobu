@@ -2,26 +2,27 @@
  * Firmware download + install section.
  *
  * Shows the latest GitHub release of kobu firmware (`firmware-latest`
- * pre-release, plus any tagged `firmware-vX.Y.Z` builds) with one-click
- * download buttons for `central.uf2` and `peripheral.uf2`, plus a short
- * installation guide. When a kobu is currently connected, a "Enter
- * bootloader" button sends the Vial `BootloaderJump` command so the
- * central reboots into UF2 mode without a physical reset.
+ * pre-release, plus any tagged `firmware-vX.Y.Z` builds). For each
+ * release card we render:
+ *
+ *   * One-click install (Chromium-only): `InstallButton` walks the user
+ *     through reset → directory picker → write. The actual physical
+ *     RESET is always manual — we never send `BootloaderJump`.
+ *   * Download link as a fallback path for users on Safari / Firefox or
+ *     who want to flash from a separate machine.
  *
  * The section is always visible — users typically arrive here to
  * install firmware *before* they can connect, so we shouldn't gate it
  * on the connection state.
  */
 
-import { useState } from 'react';
-import { enterBootloader } from '../protocol/device';
-import { useConnectionStore } from '../state/connection';
 import {
   type FirmwareRelease,
   findAsset,
   formatBytes,
   useFirmwareReleases,
 } from '../state/firmware';
+import { InstallButton } from './InstallButton';
 
 export function FirmwareSection() {
   const { state, refresh } = useFirmwareReleases();
@@ -39,9 +40,9 @@ export function FirmwareSection() {
         </button>
       </div>
       <p className="text-sm text-zinc-600 dark:text-zinc-400">
-        GitHub Actions が自動ビルドした kobu の最新ファームウェアです。central / peripheral
-        それぞれの uf2 をダウンロードし、対象の XIAO BLE
-        をブートローダモードにして書き込んでください。
+        GitHub Actions が自動ビルドした kobu の最新ファームウェアです。central / peripheral の XIAO
+        BLE をそれぞれブートローダモード (RESET 2 連打)
+        にしてから「インストール」を実行してください。
       </p>
 
       {state.kind === 'loading' && (
@@ -71,8 +72,6 @@ export function FirmwareSection() {
 
       {state.kind === 'ready' &&
         state.releases.map((release) => <ReleaseCard key={release.tag} release={release} />)}
-
-      <InstallGuide />
     </section>
   );
 }
@@ -109,9 +108,9 @@ function ReleaseCard({ release }: { release: FirmwareRelease }) {
       </header>
       <p className="text-xs text-zinc-500 dark:text-zinc-400">公開日時: {published}</p>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <AssetButton label="セントラル (左半分)" asset={central} fallbackName="central.uf2" />
-        <AssetButton
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <AssetPanel label="セントラル (左半分)" asset={central} fallbackName="central.uf2" />
+        <AssetPanel
           label="ペリフェラル (右半分)"
           asset={peripheral}
           fallbackName="peripheral.uf2"
@@ -128,96 +127,32 @@ function ReleaseCard({ release }: { release: FirmwareRelease }) {
   );
 }
 
-interface AssetButtonProps {
+interface AssetPanelProps {
   label: string;
   asset: ReturnType<typeof findAsset>;
   fallbackName: string;
 }
 
-function AssetButton({ label, asset, fallbackName }: AssetButtonProps) {
+function AssetPanel({ label, asset, fallbackName }: AssetPanelProps) {
   if (!asset) {
     return (
-      <div className="rounded-md border border-dashed border-zinc-300 dark:border-zinc-700 p-3 text-xs text-zinc-500">
+      <div className="rounded-md border border-dashed border-zinc-300 dark:border-zinc-700 p-3 text-xs text-zinc-500 space-y-1">
         <p className="font-medium">{label}</p>
-        <p className="mt-1">{fallbackName} がまだアップロードされていません</p>
+        <p>{fallbackName} がまだアップロードされていません</p>
       </div>
     );
   }
   return (
-    <a
-      href={asset.downloadUrl}
-      download={asset.name}
-      className="rounded-md border border-zinc-300 dark:border-zinc-700 p-3 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-800 block"
-    >
-      <p className="font-medium">{label}</p>
-      <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-        <span className="font-mono">{asset.name}</span> ・ {formatBytes(asset.size)}
-      </p>
-      <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">ダウンロード ↓</p>
-    </a>
-  );
-}
-
-function InstallGuide() {
-  const connection = useConnectionStore((s) => s.state);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function onJump() {
-    if (connection.kind !== 'ready') return;
-    setError(null);
-    setBusy(true);
-    try {
-      await enterBootloader(connection.transport);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="rounded-md border border-zinc-200 dark:border-zinc-800 p-4 space-y-3 text-sm">
-      <h3 className="font-semibold">インストール手順</h3>
-      <ol className="list-decimal list-inside space-y-2 text-zinc-700 dark:text-zinc-300">
-        <li>
-          上のボタンから <span className="font-mono">central.uf2</span> /{' '}
-          <span className="font-mono">peripheral.uf2</span> をダウンロード
-        </li>
-        <li>
-          書き込み対象の XIAO BLE をブートローダモードに入れる
-          <ul className="mt-1 ml-4 list-disc list-inside text-xs text-zinc-500 dark:text-zinc-400 space-y-0.5">
-            <li>物理 RESET ボタンを 2 回素早く押す</li>
-            <li>または、kobu に接続済みの場合は下の「ブートローダへ移行」ボタンを押す</li>
-          </ul>
-        </li>
-        <li>
-          OS のファイルマネージャに <span className="font-mono">XIAO-BOOT</span> ボリュームが現れる
-        </li>
-        <li>ダウンロードした uf2 をそのボリュームへドラッグ&ドロップ</li>
-        <li>書き込みが終わると自動的に再起動し、ボリュームが消える</li>
-      </ol>
-
-      <div className="pt-2 border-t border-zinc-200 dark:border-zinc-800 space-y-2">
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={() => {
-              void onJump();
-            }}
-            disabled={connection.kind !== 'ready' || busy}
-            className="rounded-md border border-zinc-300 dark:border-zinc-700 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {busy ? '送信中…' : 'ブートローダへ移行 (central)'}
-          </button>
-          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            {connection.kind === 'ready'
-              ? '接続中の central を UF2 モードへ再起動します。ペリフェラルは物理 RESET が必要です。'
-              : '接続中のときに有効になります（USB / BLE どちらでも）。'}
-          </p>
-        </div>
-        {error && <p className="text-xs text-rose-700 dark:text-rose-400">エラー: {error}</p>}
-      </div>
+    <div className="space-y-2">
+      <InstallButton label={label} asset={asset} />
+      <a
+        href={asset.downloadUrl}
+        download={asset.name}
+        className="block text-xs text-zinc-500 dark:text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200"
+      >
+        <span className="font-mono">{asset.name}</span> ・ {formatBytes(asset.size)} ・ uf2
+        を手動ダウンロード ↓
+      </a>
     </div>
   );
 }

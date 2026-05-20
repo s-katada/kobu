@@ -5,19 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * The firmware module is cached at module scope, so reload the
  * component (and every transitive module behind it) between tests.
- *
- * IMPORTANT: after `vi.resetModules()` the connection store also gets
- * a fresh instance, so callers must use the store returned here — not
- * the one imported from this file's top-level — when priming state.
  */
 async function freshFirmwareSection() {
   vi.resetModules();
   const componentMod = await import('./FirmwareSection');
-  const connectionMod = await import('../state/connection');
-  return {
-    FirmwareSection: componentMod.FirmwareSection,
-    useConnectionStore: connectionMod.useConnectionStore,
-  };
+  return { FirmwareSection: componentMod.FirmwareSection };
 }
 
 function mockFetchOk(payload: unknown) {
@@ -58,12 +50,31 @@ function fixtureLatestRelease() {
 }
 
 describe('FirmwareSection', () => {
+  // Save and restore showDirectoryPicker so the embedded InstallButton
+  // renders its supported branch (with the install button) in jsdom.
+  let originalShowDirectoryPicker:
+    | ((opts?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>)
+    | undefined;
+
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
+    const w = window as Window & {
+      showDirectoryPicker?: (opts?: {
+        mode?: 'read' | 'readwrite';
+      }) => Promise<FileSystemDirectoryHandle>;
+    };
+    originalShowDirectoryPicker = w.showDirectoryPicker;
+    w.showDirectoryPicker = vi.fn();
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    const w = window as unknown as {
+      showDirectoryPicker:
+        | ((opts?: { mode?: 'read' | 'readwrite' }) => Promise<FileSystemDirectoryHandle>)
+        | undefined;
+    };
+    w.showDirectoryPicker = originalShowDirectoryPicker;
   });
 
   it('shows the loading state immediately and the release card once the fetch resolves', async () => {
@@ -77,18 +88,32 @@ describe('FirmwareSection', () => {
       expect(screen.getByText('Latest firmware build (abc1234)')).toBeInTheDocument(),
     );
     expect(screen.getByText('latest')).toBeInTheDocument();
-    // download links
-    const centralLink = screen.getByRole('link', { name: /セントラル/ });
+
+    // Download fallback links carry the correct href + download attrs.
+    const centralLink = screen.getByRole('link', { name: /central\.uf2/ });
     expect(centralLink).toHaveAttribute(
       'href',
       'https://github.com/s-katada/kobu/releases/download/firmware-latest/central.uf2',
     );
     expect(centralLink).toHaveAttribute('download', 'central.uf2');
-    const peripheralLink = screen.getByRole('link', { name: /ペリフェラル/ });
+    const peripheralLink = screen.getByRole('link', { name: /peripheral\.uf2/ });
     expect(peripheralLink).toHaveAttribute(
       'href',
       'https://github.com/s-katada/kobu/releases/download/firmware-latest/peripheral.uf2',
     );
+  });
+
+  it('renders one install button per side', async () => {
+    vi.stubGlobal('fetch', mockFetchOk(fixtureLatestRelease()));
+    const { FirmwareSection } = await freshFirmwareSection();
+    render(<FirmwareSection />);
+    await waitFor(() =>
+      expect(screen.getByText('Latest firmware build (abc1234)')).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('button', { name: /セントラル.*をインストール/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /ペリフェラル.*をインストール/ }),
+    ).toBeInTheDocument();
   });
 
   it('renders the empty state when no firmware releases exist', async () => {
@@ -115,59 +140,6 @@ describe('FirmwareSection', () => {
       expect(screen.getByText(/リリース情報の取得に失敗しました/)).toBeInTheDocument(),
     );
     expect(screen.getByText(/rate-limited/)).toBeInTheDocument();
-  });
-
-  it('disables ブートローダへ移行 when no kobu is connected and explains why', async () => {
-    vi.stubGlobal('fetch', mockFetchOk(fixtureLatestRelease()));
-    const { FirmwareSection } = await freshFirmwareSection();
-    render(<FirmwareSection />);
-    await waitFor(() =>
-      expect(screen.getByText('Latest firmware build (abc1234)')).toBeInTheDocument(),
-    );
-    const button = screen.getByRole('button', { name: /ブートローダへ移行/ });
-    expect(button).toBeDisabled();
-    expect(screen.getByText(/接続中のときに有効になります/)).toBeInTheDocument();
-  });
-
-  it('enables and invokes enterBootloader when a kobu is connected', async () => {
-    vi.stubGlobal('fetch', mockFetchOk(fixtureLatestRelease()));
-    const { FirmwareSection, useConnectionStore } = await freshFirmwareSection();
-    const { TransportError } = await import('../transport/types');
-
-    const sendAndReceive = vi.fn(async () => {
-      throw new TransportError('receive-timeout', 'simulated');
-    });
-    useConnectionStore.setState({
-      state: {
-        kind: 'ready',
-        transport: { sendAndReceive } as never,
-        handshake: {
-          viaProtocolVersion: 0x0009,
-          keyboardId: {
-            vialProtocolVersion: 6,
-            uid: new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]),
-            featureFlags: 0,
-          },
-          definition: { matrix: { rows: 4, cols: 10 }, layouts: { keymap: [] } },
-          isKobu: true,
-        },
-        deviceName: 'kobu',
-        definitionFromCache: false,
-      },
-    });
-
-    render(<FirmwareSection />);
-    await waitFor(() =>
-      expect(screen.getByText('Latest firmware build (abc1234)')).toBeInTheDocument(),
-    );
-
-    const button = screen.getByRole('button', { name: /ブートローダへ移行/ });
-    expect(button).not.toBeDisabled();
-    await userEvent.click(button);
-    expect(sendAndReceive).toHaveBeenCalledTimes(1);
-    const firstCall = sendAndReceive.mock.calls[0] as unknown as [Uint8Array] | undefined;
-    const sentPacket = firstCall?.[0];
-    expect(sentPacket?.[0]).toBe(0x0b);
   });
 
   it('clicking 再取得 forces a refetch (cache reset)', async () => {
