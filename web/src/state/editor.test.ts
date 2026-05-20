@@ -190,4 +190,146 @@ describe('useEditorStore', () => {
     expect(useEditorStore.getState().activeLayer).toBe(3);
     expect(useEditorStore.getState().selected).toBeNull();
   });
+
+  it('setActiveLayer clamps negative values to 0', async () => {
+    const t = fakeTransport();
+    await useEditorStore.getState().attach(t, definition());
+    useEditorStore.getState().setActiveLayer(-5);
+    expect(useEditorStore.getState().activeLayer).toBe(0);
+  });
+
+  it('setActiveLayer is a no-op before attach', () => {
+    useEditorStore.getState().setActiveLayer(2);
+    expect(useEditorStore.getState().activeLayer).toBe(0);
+  });
+
+  it('attach surfaces an error phase when fetchLayerCount throws', async () => {
+    const broken = {
+      sendAndReceive: async () => {
+        throw new Error('hid blew up');
+      },
+    } as unknown as WebHidTransport;
+    await useEditorStore.getState().attach(broken, definition());
+    const state = useEditorStore.getState();
+    expect(state.phase.kind).toBe('error');
+    if (state.phase.kind === 'error') {
+      expect(state.phase.message).toContain('hid blew up');
+    }
+    expect(state.baseline).toBeNull();
+  });
+
+  it('setKey is a no-op when the new value equals the existing one', async () => {
+    const t = fakeTransport();
+    await useEditorStore.getState().attach(t, definition());
+    const before = useEditorStore.getState().baseline?.[0]?.[0]?.[0];
+    if (before === undefined) throw new Error('baseline missing');
+
+    useEditorStore.getState().setKey({ layer: 0, row: 0, col: 0 }, before);
+    expect(selectIsDirty(useEditorStore.getState())).toBe(false);
+    expect(useEditorStore.getState().undoStack).toHaveLength(0);
+  });
+
+  it('applyKeyToSelection writes into the currently-selected cell', async () => {
+    const t = fakeTransport();
+    await useEditorStore.getState().attach(t, definition());
+    useEditorStore.getState().selectCell({ layer: 0, row: 1, col: 2 });
+    useEditorStore.getState().applyKeyToSelection(0x29);
+    expect(useEditorStore.getState().local?.[0]?.[1]?.[2]).toBe(0x29);
+  });
+
+  it('applyKeyToSelection is a no-op when no cell is selected', async () => {
+    const t = fakeTransport();
+    await useEditorStore.getState().attach(t, definition());
+    useEditorStore.getState().applyKeyToSelection(0x29);
+    expect(selectIsDirty(useEditorStore.getState())).toBe(false);
+  });
+
+  it('resetSelectionToBaseline restores the baseline value at the selected cell', async () => {
+    const t = fakeTransport();
+    await useEditorStore.getState().attach(t, definition());
+    const pos = { layer: 0, row: 0, col: 0 };
+    const baseValue = useEditorStore.getState().baseline?.[0]?.[0]?.[0];
+    if (baseValue === undefined) throw new Error('baseline missing');
+
+    useEditorStore.getState().setKey(pos, 0x29);
+    expect(useEditorStore.getState().local?.[0]?.[0]?.[0]).toBe(0x29);
+    useEditorStore.getState().selectCell(pos);
+    useEditorStore.getState().resetSelectionToBaseline();
+    expect(useEditorStore.getState().local?.[0]?.[0]?.[0]).toBe(baseValue);
+  });
+
+  it('resetSelectionToBaseline is a no-op when nothing is selected', async () => {
+    const t = fakeTransport();
+    await useEditorStore.getState().attach(t, definition());
+    expect(() => useEditorStore.getState().resetSelectionToBaseline()).not.toThrow();
+  });
+
+  it('undo and redo are no-ops when their stacks are empty', async () => {
+    const t = fakeTransport();
+    await useEditorStore.getState().attach(t, definition());
+    expect(() => useEditorStore.getState().undo()).not.toThrow();
+    expect(() => useEditorStore.getState().redo()).not.toThrow();
+  });
+
+  it('a new edit clears the redo stack', async () => {
+    const t = fakeTransport();
+    await useEditorStore.getState().attach(t, definition());
+    const pos = { layer: 0, row: 0, col: 0 };
+    useEditorStore.getState().setKey(pos, 0x29);
+    useEditorStore.getState().undo();
+    expect(useEditorStore.getState().redoStack).toHaveLength(1);
+    useEditorStore.getState().setKey(pos, 0x2a);
+    expect(useEditorStore.getState().redoStack).toHaveLength(0);
+  });
+
+  it('save() is a no-op when nothing is dirty', async () => {
+    const fake = new FakeTransport();
+    await useEditorStore.getState().attach(fake as unknown as WebHidTransport, definition());
+    await useEditorStore.getState().save();
+    expect(fake.writes).toHaveLength(0);
+    expect(useEditorStore.getState().phase.kind).toBe('ready');
+  });
+
+  it('reloadFromDevice replaces baseline and clears dirty', async () => {
+    const fake = new FakeTransport();
+    await useEditorStore.getState().attach(fake as unknown as WebHidTransport, definition());
+    useEditorStore.getState().setKey({ layer: 0, row: 0, col: 0 }, 0x29);
+    expect(selectIsDirty(useEditorStore.getState())).toBe(true);
+
+    // Mutate the underlying device so reload sees the new value.
+    const idx = fake.cellIndex(0, 0, 0);
+    fake.keymap[idx] = 0x2b;
+
+    await useEditorStore.getState().reloadFromDevice();
+    const state = useEditorStore.getState();
+    expect(state.baseline?.[0]?.[0]?.[0]).toBe(0x2b);
+    expect(state.local).toEqual(state.baseline);
+    expect(state.undoStack).toHaveLength(0);
+    expect(state.redoStack).toHaveLength(0);
+  });
+
+  it('reloadFromDevice surfaces an error phase when the transport throws', async () => {
+    const fake = new FakeTransport();
+    await useEditorStore.getState().attach(fake as unknown as WebHidTransport, definition());
+    fake.sendAndReceive = async () => {
+      throw new Error('disconnected');
+    };
+    await useEditorStore.getState().reloadFromDevice();
+    expect(useEditorStore.getState().phase.kind).toBe('error');
+  });
+
+  it('detach resets the entire store', async () => {
+    const fake = new FakeTransport();
+    await useEditorStore.getState().attach(fake as unknown as WebHidTransport, definition());
+    useEditorStore.getState().setKey({ layer: 0, row: 0, col: 0 }, 0x29);
+    useEditorStore.getState().selectCell({ layer: 0, row: 0, col: 0 });
+
+    useEditorStore.getState().detach();
+    const state = useEditorStore.getState();
+    expect(state.phase.kind).toBe('empty');
+    expect(state.transport).toBeNull();
+    expect(state.baseline).toBeNull();
+    expect(state.selected).toBeNull();
+    expect(state.undoStack).toHaveLength(0);
+  });
 });

@@ -198,4 +198,98 @@ describe('useConnectionStore', () => {
     expect(state.kind).toBe('ready');
     if (state.kind === 'ready') expect(state.definitionFromCache).toBe(true);
   });
+
+  it('promptConnect surfaces a TransportError kind on handshake send-failed', async () => {
+    const device = createMockDevice();
+    fakeHid.requestDevice.mockResolvedValueOnce([device]);
+    const { TransportError } = await import('../transport/types');
+    mockPerformHandshake.mockRejectedValueOnce(
+      new TransportError('send-failed', 'simulated send failure'),
+    );
+
+    await useConnectionStore.getState().promptConnect();
+
+    const state = useConnectionStore.getState().state;
+    expect(state.kind).toBe('error');
+    if (state.kind === 'error') {
+      expect(state.errorKind).toBe('send-failed');
+      expect(state.message).toContain('simulated send failure');
+    }
+  });
+
+  it('promptConnect surfaces unknown-kind error when handshake throws a non-TransportError', async () => {
+    const device = createMockDevice();
+    fakeHid.requestDevice.mockResolvedValueOnce([device]);
+    mockPerformHandshake.mockRejectedValueOnce(new TypeError('boom'));
+
+    await useConnectionStore.getState().promptConnect();
+
+    const state = useConnectionStore.getState().state;
+    expect(state.kind).toBe('error');
+    if (state.kind === 'error') {
+      expect(state.errorKind).toBe('unknown');
+    }
+  });
+
+  it('promptConnect is a no-op when the store is already connecting', async () => {
+    useConnectionStore.setState({ state: { kind: 'connecting' } });
+    await useConnectionStore.getState().promptConnect();
+    expect(fakeHid.requestDevice).not.toHaveBeenCalled();
+    expect(useConnectionStore.getState().state.kind).toBe('connecting');
+  });
+
+  it('clearError does nothing when the store is not in an error state', () => {
+    useConnectionStore.setState({ state: { kind: 'connecting' } });
+    useConnectionStore.getState().clearError();
+    expect(useConnectionStore.getState().state.kind).toBe('connecting');
+  });
+
+  it('disconnect is a no-op when not connected', async () => {
+    useConnectionStore.setState({ state: { kind: 'idle' } });
+    await useConnectionStore.getState().disconnect();
+    expect(useConnectionStore.getState().state.kind).toBe('idle');
+  });
+
+  it('trySilentReconnect picks up a previously-authorised device without prompting', async () => {
+    const device = createMockDevice();
+    fakeHid.getDevices.mockResolvedValueOnce([device]);
+    mockPerformHandshake.mockResolvedValueOnce(fakeHandshakeResult());
+
+    await useConnectionStore.getState().trySilentReconnect();
+    expect(useConnectionStore.getState().state.kind).toBe('ready');
+    expect(fakeHid.requestDevice).not.toHaveBeenCalled();
+  });
+
+  it('trySilentReconnect is a no-op when there are no previously-authorised devices', async () => {
+    fakeHid.getDevices.mockResolvedValueOnce([]);
+    await useConnectionStore.getState().trySilentReconnect();
+    expect(useConnectionStore.getState().state.kind).toBe('idle');
+  });
+
+  it('trySilentReconnect is a no-op when the store is not in idle state', async () => {
+    useConnectionStore.setState({ state: { kind: 'connecting' } });
+    await useConnectionStore.getState().trySilentReconnect();
+    expect(fakeHid.getDevices).not.toHaveBeenCalled();
+  });
+
+  it('wrong-device disconnect closes the transport and returns to idle', async () => {
+    const device = createMockDevice();
+    fakeHid.requestDevice.mockResolvedValueOnce([device]);
+    mockPerformHandshake.mockResolvedValueOnce(
+      fakeHandshakeResult({
+        isKobu: false,
+        keyboardId: {
+          vialProtocolVersion: 6,
+          uid: new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0]),
+          featureFlags: 0,
+        },
+      }),
+    );
+    await useConnectionStore.getState().promptConnect();
+    expect(useConnectionStore.getState().state.kind).toBe('wrong-device');
+
+    await useConnectionStore.getState().disconnect();
+    expect(useConnectionStore.getState().state.kind).toBe('idle');
+    expect(device.close).toHaveBeenCalled();
+  });
 });
