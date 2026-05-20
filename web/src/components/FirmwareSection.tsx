@@ -145,6 +145,7 @@ function AssetPanel({ label, asset, fallbackName }: AssetPanelProps) {
   return (
     <div className="space-y-2">
       <InstallButton label={label} asset={asset} />
+      <InstallButton label={label} asset={asset} mode="clean" />
       <a
         href={asset.downloadUrl}
         download={asset.name}
