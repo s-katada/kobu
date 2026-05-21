@@ -26,6 +26,11 @@ dist-ssr
 # Vercel
 .vercel
 
+# Cloudflare Wrangler
+.wrangler
+.dev.vars
+.dev.vars.*
+
 # Env
 .env
 .env.local
