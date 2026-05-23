@@ -41,6 +41,7 @@ use rmk::channel::{CONTROLLER_CHANNEL, ControllerSub};
 use rmk::controller::{Controller, PollingController};
 use rmk::event::ControllerEvent;
 
+use crate::config;
 use crate::trackball::PERIPHERAL_ACTIVITY;
 
 /// Read the nRF52840 POWER peripheral's VBUS-present flag. `true` means a
@@ -49,13 +50,6 @@ use crate::trackball::PERIPHERAL_ACTIVITY;
 fn vbus_present() -> bool {
     pac::POWER.usbregstatus().read().vbusdetect()
 }
-
-/// How long the LED stays purple after each peripheral trackball event.
-const PURPLE_HOLD: Duration = Duration::from_millis(200);
-/// Battery percentage above which the LED is green.
-const HIGH_THRESHOLD: u8 = 60;
-/// Battery percentage above which the LED is yellow. Below this the LED is red.
-const LOW_THRESHOLD: u8 = 20;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Color {
@@ -75,10 +69,16 @@ enum BatteryColor {
 }
 
 impl BatteryColor {
+    /// Battery thresholds are read live from `crate::config` so a
+    /// future Vial `CustomSetValue` write retunes them without a
+    /// reboot. Defaults (60 / 20) match the previous hardcoded
+    /// constants.
     fn from_percent(p: u8) -> Self {
-        if p > HIGH_THRESHOLD {
+        let high = config::status_led_battery_high_threshold();
+        let low = config::status_led_battery_low_threshold();
+        if p > high {
             BatteryColor::Green
-        } else if p > LOW_THRESHOLD {
+        } else if p > low {
             BatteryColor::Yellow
         } else {
             BatteryColor::Red
@@ -187,7 +187,15 @@ impl<'d> Controller for StatusLedController<'d> {
                 self.battery = BatteryColor::from_percent(percent);
             }
             LedEvent::PeripheralActivity => {
-                self.peripheral_active_until = Some(Instant::now() + PURPLE_HOLD);
+                // Hold window is live-tunable via `crate::config`.
+                // Default is 200 ms; a value of 0 disables the purple
+                // overlay entirely.
+                let hold = config::status_led_purple_hold();
+                self.peripheral_active_until = if hold == Duration::from_ticks(0) {
+                    None
+                } else {
+                    Some(Instant::now() + hold)
+                };
             }
         }
         let color = self.target_color();

@@ -259,6 +259,90 @@ export function buildBootloaderJump(): VialPacket {
   return p;
 }
 
+// ─── Macro builders ───────────────────────────────────────────────────────
+
+/**
+ * Via `DynamicKeymapMacroGetCount` — how many macro slots the firmware
+ * exposes. RMK 0.8 hardcodes this to 32, regardless of the
+ * `macro_space_size` from `keyboard.toml`.
+ *
+ * The reply puts the count in `reply[1]`.
+ */
+export function buildMacroGetCount(): VialPacket {
+  const p = emptyPacket();
+  p[0] = ViaCommand.DynamicKeymapMacroGetCount;
+  return p;
+}
+
+/**
+ * Via `DynamicKeymapMacroGetBufferSize` — total bytes the firmware
+ * reserves for the concatenated macro sequences (== `macro_space_size`
+ * in `keyboard.toml`).
+ *
+ * The reply encodes the size as **big-endian u16** at `reply[1..3]` —
+ * `[cmd, hi, lo]`, no further bytes. This matches the standard
+ * convention for Via (`Via*`) commands.
+ */
+export function buildMacroGetBufferSize(): VialPacket {
+  const p = emptyPacket();
+  p[0] = ViaCommand.DynamicKeymapMacroGetBufferSize;
+  return p;
+}
+
+/**
+ * Via `DynamicKeymapMacroGetBuffer` — read a contiguous range of the
+ * macro buffer. Offset is **big-endian** at `packet[1..3]`; size at
+ * `packet[3]` (max 28).
+ *
+ * The reply echoes back `[cmd, offset_hi, offset_lo, size, ...payload]`
+ * — same shape as `GetBuffer` for the keymap.
+ */
+export function buildMacroGetBuffer(offset: number, size: number): VialPacket {
+  const p = emptyPacket();
+  p[0] = ViaCommand.DynamicKeymapMacroGetBuffer;
+  p[1] = (offset >> 8) & 0xff;
+  p[2] = offset & 0xff;
+  p[3] = size & 0xff;
+  return p;
+}
+
+/**
+ * Via `DynamicKeymapMacroSetBuffer` — write a contiguous range of the
+ * macro buffer.
+ *
+ *   packet[1..3] = offset (BE u16)
+ *   packet[3]    = size   (u8, 1..28)
+ *   packet[4..]  = bytes to write
+ *
+ * RMK 0.8 zeroes the firmware-side cache when `offset == 0`, so callers
+ * must start the rewrite at offset 0 even if only a tail byte changed.
+ * After every chunk the firmware flushes the entire cache to flash.
+ */
+export function buildMacroSetBuffer(offset: number, data: Uint8Array): VialPacket {
+  if (data.length > 28) {
+    throw new RangeError(`macro chunk too large: ${data.length} > 28`);
+  }
+  const p = emptyPacket();
+  p[0] = ViaCommand.DynamicKeymapMacroSetBuffer;
+  p[1] = (offset >> 8) & 0xff;
+  p[2] = offset & 0xff;
+  p[3] = data.length & 0xff;
+  p.set(data, 4);
+  return p;
+}
+
+/**
+ * Via `DynamicKeymapMacroReset` — clobber every macro back to empty.
+ * RMK 0.8 logs but does not act on this command; callers should
+ * achieve the same effect by writing an all-zero buffer with
+ * `buildMacroSetBuffer`.
+ */
+export function buildMacroReset(): VialPacket {
+  const p = emptyPacket();
+  p[0] = ViaCommand.DynamicKeymapMacroReset;
+  return p;
+}
+
 // ─── Parsers ──────────────────────────────────────────────────────────────
 
 export interface KeyboardId {
@@ -340,6 +424,22 @@ export function parseUnlockPoll(reply: VialPacket): UnlockPollResult {
     inProgress: (reply[1] ?? 0) !== 0,
     remaining: reply[2] ?? 0,
   };
+}
+
+/**
+ * Number of macro slots the firmware was built with (RMK 0.8 returns
+ * 32 hardcoded). Reads `reply[1]`.
+ */
+export function parseMacroCount(reply: VialPacket): number {
+  return reply[1] ?? 0;
+}
+
+/**
+ * Total byte capacity of the macro buffer. RMK 0.8 emits BE u16 at
+ * `reply[1..3]` (NOT LE — see `buildMacroGetBufferSize`).
+ */
+export function parseMacroBufferSize(reply: VialPacket): number {
+  return readU16BE(reply, 1);
 }
 
 // ─── Byte helpers ─────────────────────────────────────────────────────────
