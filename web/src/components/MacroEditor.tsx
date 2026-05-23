@@ -21,7 +21,7 @@ import { useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import type { KeyboardLayoutDef } from '../protocol/handshake';
 import { labelForKeycode } from '../protocol/keycodes';
-import type { MacroAction } from '../protocol/macros';
+import { MAX_DELAY_MS, type MacroAction } from '../protocol/macros';
 import { selectDirtyMask, selectIsDirty, selectUsedBytes, useMacroStore } from '../state/macros';
 import { KeycodePicker } from './KeycodePicker';
 
@@ -356,7 +356,7 @@ function ActionRow({ definition, action, onChange, onPickKey }: ActionRowProps) 
             <input
               type="number"
               min={0}
-              max={65025}
+              max={MAX_DELAY_MS}
               step={10}
               value={action.ms}
               onChange={(e) => {

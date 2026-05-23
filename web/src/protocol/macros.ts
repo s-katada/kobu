@@ -41,6 +41,21 @@ import {
 /** Max payload bytes per `Macro(Get|Set)Buffer` reply / packet. */
 export const MACRO_CHUNK = 28;
 
+/**
+ * Largest delay (ms) that round-trips through the Vial wire format.
+ *
+ * The encoder produces two bytes `b1 = (ms % 255) + 1`, `b2 =
+ * floor(ms / 255) + 1`. Both must fit in a u8 — otherwise the `&
+ * 0xff` mask truncates `b2` to 0 and the firmware interprets that as
+ * an end-of-macro terminator, silently dropping the rest of the
+ * sequence.
+ *
+ * Maximum encoder output is `(b1, b2) = (255, 255)`, achieved at
+ * `ms = 65024` (`= 254 + 254 * 255`). Going one ms higher pushes
+ * `floor(ms / 255) + 1` to 256 and triggers the truncation bug.
+ */
+export const MAX_DELAY_MS = 65024;
+
 export type MacroAction =
   | { kind: 'tap'; keycode: number }
   | { kind: 'down'; keycode: number }
@@ -63,7 +78,12 @@ export function encodeAction(action: MacroAction): Uint8Array {
     case 'up':
       return new Uint8Array([0x01, 0x03, action.keycode & 0xff]);
     case 'delay': {
-      const ms = Math.max(0, Math.min(action.ms, 65025)); // 255 * 255
+      // Representable max is 254 + 254*255 = 64,769. At ms = 65025 the
+      // upper byte would compute as floor(65025/255)+1 = 256, which the
+      // `& 0xff` mask truncates to 0 — and 0x00 terminates the macro on
+      // the firmware side. Clamp one step below the (b1, b2) = (255,
+      // 255) ceiling so every representable value round-trips.
+      const ms = Math.max(0, Math.min(action.ms, MAX_DELAY_MS));
       const b1 = (ms % 255) + 1;
       const b2 = Math.floor(ms / 255) + 1;
       return new Uint8Array([0x01, 0x04, b1 & 0xff, b2 & 0xff]);

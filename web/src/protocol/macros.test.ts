@@ -16,6 +16,7 @@ import {
   fetchMacroBuffer,
   fetchMacroBufferSize,
   fetchMacroCount,
+  MAX_DELAY_MS,
   type MacroAction,
   writeMacroBuffer,
 } from './macros';
@@ -40,6 +41,24 @@ describe('encodeAction', () => {
       0x04,
       (1000 % 255) + 1,
       Math.floor(1000 / 255) + 1,
+    ]);
+  });
+
+  it('delay clamps at MAX_DELAY_MS so the upper byte never overflows to 0x00', () => {
+    // MAX_DELAY_MS = 65,024 produces (b1, b2) = (255, 255). Decoding
+    // that back yields 65,024 — full round-trip without any 0x00 byte
+    // (which would prematurely terminate the macro).
+    expect(MAX_DELAY_MS).toBe(65024);
+    expect(Array.from(encodeAction({ kind: 'delay', ms: MAX_DELAY_MS }))).toEqual([
+      0x01, 0x04, 255, 255,
+    ]);
+    // Anything above the cap clamps down — must NOT silently encode
+    // as 0x00 0x00 (which the previous `Math.min(ms, 65025)` clamp
+    // did at exactly ms=65025, because floor(65025/255)+1 = 256
+    // truncates to 0).
+    expect(Array.from(encodeAction({ kind: 'delay', ms: 65025 }))).toEqual([0x01, 0x04, 255, 255]);
+    expect(Array.from(encodeAction({ kind: 'delay', ms: 1_000_000 }))).toEqual([
+      0x01, 0x04, 255, 255,
     ]);
   });
   it('text emits a single literal byte', () => {

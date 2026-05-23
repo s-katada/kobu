@@ -226,8 +226,13 @@ export const useMacroStore = create<MacroEditorState>((set, get) => ({
       return;
     }
 
-    // Re-use the keymap save's unlock gate — RMK enforces unlock for
-    // macro writes the same way it does for keymap writes.
+    // Re-use the keymap save's unlock gate. The unlock check is a
+    // client-side UX convention (vial-gui does the same) — RMK 0.8's
+    // host/via/mod.rs accepts DynamicKeymapMacroSetBuffer (and
+    // DynamicKeymapSetBuffer) unconditionally. We still gate here
+    // so a user who forgets to hold the unlock chord gets the same
+    // "the device is locked" feedback whether they're saving keymap,
+    // macros, combos, or morses.
     try {
       const status = await fetchUnlockStatus(transport);
       if (status.locked) {

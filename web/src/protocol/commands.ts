@@ -279,10 +279,9 @@ export function buildMacroGetCount(): VialPacket {
  * reserves for the concatenated macro sequences (== `macro_space_size`
  * in `keyboard.toml`).
  *
- * The reply encodes the size as **big-endian u16** at `reply[1..3]`.
- * Note: RMK 0.8 emits BE here even though Via canonically uses BE for
- * Via commands — this matches the convention, but worth flagging
- * because the response *layout* is `[cmd, hi, lo]` (no further bytes).
+ * The reply encodes the size as **big-endian u16** at `reply[1..3]` —
+ * `[cmd, hi, lo]`, no further bytes. This matches the standard
+ * convention for Via (`Via*`) commands.
  */
 export function buildMacroGetBufferSize(): VialPacket {
   const p = emptyPacket();
