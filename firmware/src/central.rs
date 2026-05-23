@@ -1,6 +1,7 @@
 #![no_main]
 #![no_std]
 
+mod config;
 mod status_led;
 mod trackball;
 
