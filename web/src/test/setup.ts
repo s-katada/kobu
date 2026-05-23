@@ -1,4 +1,17 @@
 import '@testing-library/jest-dom/vitest';
+import { vi } from 'vitest';
+
+// `virtual:pwa-register/react` is a virtual module emitted by
+// vite-plugin-pwa at build time. Vitest (jsdom env) cannot resolve
+// it, so we replace it with a no-op stub for component tests. The
+// real flow is exercised manually in a built bundle.
+vi.mock('virtual:pwa-register/react', () => ({
+  useRegisterSW: () => ({
+    needRefresh: [false, () => {}],
+    offlineReady: [false, () => {}],
+    updateServiceWorker: async () => {},
+  }),
+}));
 
 // Node 26 ships an experimental built-in `localStorage` that is
 // disabled unless the runtime is launched with `--localstorage-file`.
