@@ -14,6 +14,7 @@
 import { create } from 'zustand';
 import { fetchDynamicEntryCounts } from '../protocol/combos';
 import type { MorseEntry } from '../protocol/commands';
+import { encodeWM, MOD_SHIFT } from '../protocol/keycodes';
 import {
   emptyMorse,
   entriesEqual,
@@ -254,18 +255,28 @@ export type MorseWarning = 'out-of-range' | 'no-op';
  * values — too short a tap term makes hold unreachable, too long
  * makes hold feel "stuck". A no-op entry (every keycode zero) is
  * legal but pointless.
+ *
+ * This is a pure function rather than a zustand selector because the
+ * UI calls it inside `useMemo(local)` — `useShallow` would compare
+ * nested arrays by reference and cause a re-render loop.
+ */
+export function computeWarnings(entry: MorseEntry): MorseWarning[] {
+  const warnings: MorseWarning[] = [];
+  if (entry.tapTermMs < MIN_TAP_TERM_MS || entry.tapTermMs > MAX_TAP_TERM_MS) {
+    warnings.push('out-of-range');
+  }
+  if (entry.tap === 0 && entry.hold === 0 && entry.doubleTap === 0 && entry.holdAfterTap === 0) {
+    warnings.push('no-op');
+  }
+  return warnings;
+}
+
+/**
+ * Per-state advisory map — convenience for tests + callers that want
+ * a snapshot keyed by index.
  */
 export function selectWarnings(state: MorseEditorState): Array<MorseWarning[]> {
-  return state.local.map((entry) => {
-    const warnings: MorseWarning[] = [];
-    if (entry.tapTermMs < MIN_TAP_TERM_MS || entry.tapTermMs > MAX_TAP_TERM_MS) {
-      warnings.push('out-of-range');
-    }
-    if (entry.tap === 0 && entry.hold === 0 && entry.doubleTap === 0 && entry.holdAfterTap === 0) {
-      warnings.push('no-op');
-    }
-    return warnings;
-  });
+  return state.local.map(computeWarnings);
 }
 
 // ─── Built-in presets ─────────────────────────────────────────────────────
@@ -286,12 +297,15 @@ export const MORSE_PRESETS: readonly MorsePreset[] = [
     }),
   },
   {
-    name: '括弧ペア (())',
-    description: 'タップで `(`、ホールドで `)` を送出するシンプルなペア。',
+    name: '括弧ペア ( )',
+    description:
+      'タップで `(`、二度押しで `)`。WM (KeyWithModifier) で Shift + 9 / Shift + 0 を 1 キーで送出。',
+    // 0x26 = HID Usage "Keyboard 9", 0x27 = "Keyboard 0". US layout
+    // turns Shift+9 into `(` and Shift+0 into `)`.
     build: (e) => ({
       ...e,
-      tap: 0x202f, // ShiftPause = (
-      hold: 0x2030, // ShiftEqual = )
+      tap: encodeWM(0x26, MOD_SHIFT), // 0x0226 — Shift + 9 = (
+      doubleTap: encodeWM(0x27, MOD_SHIFT), // 0x0227 — Shift + 0 = )
     }),
   },
   {

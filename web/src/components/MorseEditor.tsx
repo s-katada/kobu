@@ -22,6 +22,7 @@ import type { KeyboardLayoutDef } from '../protocol/handshake';
 import { labelForKeycode } from '../protocol/keycodes';
 import { MAX_TAP_TERM_MS, MIN_TAP_TERM_MS } from '../protocol/morses';
 import {
+  computeWarnings,
   MORSE_PRESETS,
   type MorsePreset,
   type MorseWarning,
@@ -59,30 +60,11 @@ export function MorseEditor({ definition, layerCount }: MorseEditorProps) {
   const reload = useMorseStore((s) => s.reloadFromDevice);
   const dirty = useMorseStore(selectIsDirty);
   const dirtyMask = useMorseStore(useShallow(selectDirtyMask));
-  // Compute warnings inline — zustand's useShallow compares each item
-  // by reference, and warnings are nested arrays that get recreated
-  // every call, so caching via the store selector would defeat itself
-  // and trigger a re-render loop. Memoising over `local` (whose
-  // reference *is* stable until an edit lands) is enough.
-  const warnings = useMemo<MorseWarning[][]>(
-    () =>
-      local.map((entry) => {
-        const w: MorseWarning[] = [];
-        if (entry.tapTermMs < MIN_TAP_TERM_MS || entry.tapTermMs > MAX_TAP_TERM_MS) {
-          w.push('out-of-range');
-        }
-        if (
-          entry.tap === 0 &&
-          entry.hold === 0 &&
-          entry.doubleTap === 0 &&
-          entry.holdAfterTap === 0
-        ) {
-          w.push('no-op');
-        }
-        return w;
-      }),
-    [local],
-  );
+  // `computeWarnings` returns a fresh array per entry — wrapping it
+  // through `useShallow` would still flag every render as "changed"
+  // (inner array references differ). Memoising over `local` (whose
+  // reference is stable until an edit lands) is the right level.
+  const warnings = useMemo<MorseWarning[][]>(() => local.map(computeWarnings), [local]);
 
   const [picker, setPicker] = useState<PickerTarget | null>(null);
 
