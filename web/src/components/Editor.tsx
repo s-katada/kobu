@@ -13,24 +13,32 @@
 import { useEffect, useState } from 'react';
 import { useConnectionStore } from '../state/connection';
 import { isCellDirty, useEditorStore } from '../state/editor';
+import { useMacroStore } from '../state/macros';
 import { BluetoothPanel } from './BluetoothPanel';
 import { EditorToolbar } from './EditorToolbar';
 import { KeycodePicker } from './KeycodePicker';
 import { KeymapView } from './KeymapView';
+import { MacroEditor } from './MacroEditor';
 
 export function Editor() {
   const connection = useConnectionStore((s) => s.state);
   const attach = useEditorStore((s) => s.attach);
   const detach = useEditorStore((s) => s.detach);
+  const attachMacros = useMacroStore((s) => s.attach);
+  const detachMacros = useMacroStore((s) => s.detach);
 
   // Attach when the connection enters `ready`; detach when it leaves.
+  // The macro store runs alongside the keymap store — same transport,
+  // independent diff state.
   useEffect(() => {
     if (connection.kind === 'ready') {
       void attach(connection.transport, connection.handshake.definition);
+      void attachMacros(connection.transport);
     } else {
       detach();
+      detachMacros();
     }
-  }, [connection, attach, detach]);
+  }, [connection, attach, detach, attachMacros, detachMacros]);
 
   const phase = useEditorStore((s) => s.phase);
   const definition = useEditorStore((s) => s.definition);
@@ -116,6 +124,8 @@ export function Editor() {
           onClose={() => setPickerOpen(false)}
         />
       )}
+
+      <MacroEditor definition={definition} layerCount={dimensions.layers} />
     </section>
   );
 }
