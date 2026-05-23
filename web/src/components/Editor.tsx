@@ -1,25 +1,30 @@
 /**
  * Top-level editor view. Composed of:
- *   * `EditorToolbar`   — layer tabs, undo/redo, save
- *   * `KeymapView`      — 4×10 split SVG
- *   * `BluetoothPanel`  — Layer 3 BLE side panel (only on layer 3)
- *   * `KeycodePicker`   — modal opened by clicking a key cell
+ *   * `EditorToolbar`     — layer tabs, undo/redo, save
+ *   * `KeymapView`        — 4×10 split SVG
+ *   * `BluetoothPanel`    — Layer 3 BLE side panel (only on layer 3)
+ *   * `KeycodePicker`     — modal opened by clicking a key cell
+ *   * `MacroEditor`       — macro buffer editor
+ *   * `ComboEditor`       — combo entries editor
+ *   * `KobuSettingsPanel` — kobu-specific runtime knobs
  *
  * Subscribes to the connection store so we know when to attach
- * (transitions to `ready`) and detach (transition out of `ready`). The
- * editor store owns the keymap + dirty state from there on.
+ * (transitions to `ready`) and detach (transition out of `ready`).
+ * The per-feature stores each own their slice of state from there on.
  */
 
 import { useEffect, useState } from 'react';
 import { useComboStore } from '../state/combos';
 import { useConnectionStore } from '../state/connection';
 import { isCellDirty, useEditorStore } from '../state/editor';
+import { useKobuSettingsStore } from '../state/kobuSettings';
 import { useMacroStore } from '../state/macros';
 import { BluetoothPanel } from './BluetoothPanel';
 import { ComboEditor } from './ComboEditor';
 import { EditorToolbar } from './EditorToolbar';
 import { KeycodePicker } from './KeycodePicker';
 import { KeymapView } from './KeymapView';
+import { KobuSettingsPanel } from './KobuSettingsPanel';
 import { MacroEditor } from './MacroEditor';
 
 export function Editor() {
@@ -30,21 +35,34 @@ export function Editor() {
   const detachMacros = useMacroStore((s) => s.detach);
   const attachCombos = useComboStore((s) => s.attach);
   const detachCombos = useComboStore((s) => s.detach);
+  const attachKobu = useKobuSettingsStore((s) => s.attach);
+  const detachKobu = useKobuSettingsStore((s) => s.detach);
 
-  // Attach when the connection enters `ready`; detach when it leaves.
-  // The macro / combo stores run alongside the keymap store — same
-  // transport, independent diff state.
+  // Attach the per-feature stores in lock-step with the connection.
+  // They share one transport but keep independent dirty state.
   useEffect(() => {
     if (connection.kind === 'ready') {
       void attach(connection.transport, connection.handshake.definition);
       void attachMacros(connection.transport);
       void attachCombos(connection.transport);
+      void attachKobu(connection.transport);
     } else {
       detach();
       detachMacros();
       detachCombos();
+      detachKobu();
     }
-  }, [connection, attach, detach, attachMacros, detachMacros, attachCombos, detachCombos]);
+  }, [
+    connection,
+    attach,
+    detach,
+    attachMacros,
+    detachMacros,
+    attachCombos,
+    detachCombos,
+    attachKobu,
+    detachKobu,
+  ]);
 
   const phase = useEditorStore((s) => s.phase);
   const definition = useEditorStore((s) => s.definition);
@@ -134,6 +152,8 @@ export function Editor() {
       <MacroEditor definition={definition} layerCount={dimensions.layers} />
 
       <ComboEditor definition={definition} layerCount={dimensions.layers} />
+
+      <KobuSettingsPanel />
     </section>
   );
 }
