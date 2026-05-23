@@ -1,7 +1,11 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as handleStore from '../install/handleStore';
+import { clearXiaoBootHandle } from '../install/handleStore';
+import { useConnectionStore } from '../state/connection';
 import type { FirmwareAsset } from '../state/firmware';
+import type { WebHidTransport } from '../transport/webhid';
 import { InstallButton } from './InstallButton';
 
 const ASSET: FirmwareAsset = {
@@ -343,5 +347,183 @@ describe('InstallButton (clean mode)', () => {
 
     await waitFor(() => expect(screen.getByText(/エラー:/)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'やり直す' })).toBeInTheDocument();
+  });
+});
+
+// ─── Auto-bootloader-jump (Phase 6.3) ─────────────────────────────────────
+
+describe('InstallButton — auto bootloader-jump (central, connected)', () => {
+  // Fake transport that records sendAndReceive calls. The
+  // `enterBootloader` helper expects either a successful round-trip
+  // OR one of the documented transport errors — both are treated as
+  // "firmware rebooted, we're good".
+  function recordingTransport(): { transport: WebHidTransport; calls: Uint8Array[] } {
+    const calls: Uint8Array[] = [];
+    const transport = {
+      sendAndReceive: vi.fn(async (packet: Uint8Array<ArrayBuffer>) => {
+        calls.push(packet);
+        // Simulate the firmware rebooting before it could ack: throw
+        // the same TransportError kind enterBootloader swallows.
+        const { TransportError } = await import('../transport/types');
+        throw new TransportError('disconnected', 'firmware rebooted');
+      }),
+    } as unknown as WebHidTransport;
+    return { transport, calls };
+  }
+
+  function readyConnection(transport: WebHidTransport) {
+    useConnectionStore.setState({
+      state: {
+        kind: 'ready',
+        transport,
+        deviceName: 'kobu',
+        definitionFromCache: false,
+        handshake: {
+          isKobu: true,
+          viaProtocolVersion: 0x0009,
+          keyboardId: {
+            vialProtocolVersion: 6,
+            uid: new Uint8Array([0xb9, 0xbc, 0x09, 0xb2, 0x9d, 0x37, 0x4c, 0xea]),
+            featureFlags: 0,
+          },
+          // The install button doesn't read the definition, but the
+          // ConnectionState shape requires it.
+          definition: {
+            matrix: { rows: 4, cols: 10 },
+            customKeycodes: [],
+            layouts: { keymap: [] },
+          },
+        },
+      },
+    });
+  }
+
+  let originalShowDirectoryPicker: WindowWithExtras['showDirectoryPicker'];
+
+  beforeEach(async () => {
+    originalShowDirectoryPicker = W.showDirectoryPicker;
+    setShowDirectoryPicker(vi.fn());
+    vi.stubGlobal('fetch', vi.fn());
+    await clearXiaoBootHandle();
+  });
+
+  afterEach(async () => {
+    setShowDirectoryPicker(originalShowDirectoryPicker ?? null);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    useConnectionStore.setState({ state: { kind: 'idle' } });
+    await clearXiaoBootHandle();
+  });
+
+  it("sends BootloaderJump on click and skips the 'press RESET' step", async () => {
+    const { handle, writes } = makeFakeXiaoBoot({ withInfo: true });
+    setShowDirectoryPicker(vi.fn(async () => handle));
+    stubFetchOk([0xaa, 0xbb]);
+    const { transport, calls } = recordingTransport();
+    readyConnection(transport);
+
+    // `mountWaitMs={0}` skips the real-time OS-mount wait — in
+    // production it's 3 s.
+    render(<InstallButton label="セントラル" target="central" asset={ASSET} mountWaitMs={0} />);
+    await userEvent.click(screen.getByRole('button', { name: /セントラルをインストール/ }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/kobu をブートローダーモードに切り替えました/)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/RESET ボタンを素早く 2 回押す/)).not.toBeInTheDocument();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[0]).toBe(0x0b); // Vial BootloaderJump
+
+    await userEvent.click(screen.getByRole('button', { name: /XIAO-BOOT を選択/ }));
+    await waitFor(() => expect(screen.getByText(/書き込みが完了しました/)).toBeInTheDocument());
+    expect(writes).toHaveLength(1);
+  });
+
+  it('skips the directory picker when a saved XIAO-BOOT handle is reusable', async () => {
+    const { handle, writes } = makeFakeXiaoBoot({ withInfo: true });
+
+    // Stub loadXiaoBootHandle directly instead of round-tripping
+    // through IDB — the fake handle has vi.fn() methods which aren't
+    // structured-cloneable, so an IDB store-then-load wouldn't
+    // preserve them.
+    vi.spyOn(handleStore, 'loadXiaoBootHandle').mockResolvedValue(handle);
+    vi.spyOn(handleStore, 'queryHandlePermission').mockResolvedValue('granted');
+    vi.spyOn(handleStore, 'isHandleAccessible').mockResolvedValue(true);
+
+    setShowDirectoryPicker(
+      vi.fn(async () => {
+        throw new Error('picker should not be called when handle is reusable');
+      }),
+    );
+    stubFetchOk([0xcc]);
+    const { transport } = recordingTransport();
+    readyConnection(transport);
+
+    render(<InstallButton label="セントラル" target="central" asset={ASSET} mountWaitMs={0} />);
+    await userEvent.click(screen.getByRole('button', { name: /セントラルをインストール/ }));
+
+    // Goes straight to fetch + write — no picker, no ready-to-pick.
+    await waitFor(() => expect(screen.getByText(/書き込みが完了しました/)).toBeInTheDocument());
+    expect(writes).toHaveLength(1);
+  });
+});
+
+describe('InstallButton — auto-jump gate (negative cases)', () => {
+  let originalShowDirectoryPicker: WindowWithExtras['showDirectoryPicker'];
+
+  beforeEach(() => {
+    originalShowDirectoryPicker = W.showDirectoryPicker;
+    setShowDirectoryPicker(vi.fn());
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    setShowDirectoryPicker(originalShowDirectoryPicker ?? null);
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    useConnectionStore.setState({ state: { kind: 'idle' } });
+  });
+
+  it('peripheral target falls back to the physical-reset wizard even with a ready central', async () => {
+    const send = vi.fn();
+    const transport = { sendAndReceive: send } as unknown as WebHidTransport;
+    useConnectionStore.setState({
+      state: {
+        kind: 'ready',
+        transport,
+        deviceName: 'kobu',
+        definitionFromCache: false,
+        handshake: {
+          isKobu: true,
+          viaProtocolVersion: 0x0009,
+          keyboardId: {
+            vialProtocolVersion: 6,
+            uid: new Uint8Array(8),
+            featureFlags: 0,
+          },
+          definition: {
+            matrix: { rows: 4, cols: 10 },
+            customKeycodes: [],
+            layouts: { keymap: [] },
+          },
+        },
+      },
+    });
+
+    render(<InstallButton label="ペリフェラル" target="peripheral" asset={ASSET} />);
+    await userEvent.click(screen.getByRole('button', { name: /ペリフェラルをインストール/ }));
+
+    // Manual reset wizard, NOT auto-jump.
+    expect(screen.getByText(/RESET ボタンを素早く 2 回押す/)).toBeInTheDocument();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('central target with no connection falls back to the physical-reset wizard', async () => {
+    useConnectionStore.setState({ state: { kind: 'idle' } });
+
+    render(<InstallButton label="セントラル" target="central" asset={ASSET} />);
+    await userEvent.click(screen.getByRole('button', { name: /セントラルをインストール/ }));
+
+    expect(screen.getByText(/RESET ボタンを素早く 2 回押す/)).toBeInTheDocument();
   });
 });

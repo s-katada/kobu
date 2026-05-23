@@ -22,7 +22,7 @@ import {
   formatBytes,
   useFirmwareReleases,
 } from '../state/firmware';
-import { InstallButton } from './InstallButton';
+import { InstallButton, type InstallTarget } from './InstallButton';
 
 export function FirmwareSection() {
   const { state, refresh } = useFirmwareReleases();
@@ -113,12 +113,14 @@ function ReleaseCard({ release }: { release: FirmwareRelease }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <AssetPanel
           label="セントラル (左半分)"
+          target="central"
           asset={central}
           resetAsset={centralReset}
           fallbackName="central.uf2"
         />
         <AssetPanel
           label="ペリフェラル (右半分)"
+          target="peripheral"
           asset={peripheral}
           resetAsset={peripheralReset}
           fallbackName="peripheral.uf2"
@@ -137,12 +139,13 @@ function ReleaseCard({ release }: { release: FirmwareRelease }) {
 
 interface AssetPanelProps {
   label: string;
+  target: InstallTarget;
   asset: ReturnType<typeof findAsset>;
   resetAsset?: ReturnType<typeof findAsset>;
   fallbackName: string;
 }
 
-function AssetPanel({ label, asset, resetAsset, fallbackName }: AssetPanelProps) {
+function AssetPanel({ label, target, asset, resetAsset, fallbackName }: AssetPanelProps) {
   if (!asset) {
     return (
       <div className="rounded-md border border-dashed border-zinc-300 dark:border-zinc-700 p-3 text-xs text-zinc-500 space-y-1">
@@ -153,9 +156,15 @@ function AssetPanel({ label, asset, resetAsset, fallbackName }: AssetPanelProps)
   }
   return (
     <div className="space-y-2">
-      <InstallButton label={label} asset={asset} />
+      <InstallButton label={label} target={target} asset={asset} />
       {resetAsset && (
-        <InstallButton label={label} asset={asset} mode="clean" resetAsset={resetAsset} />
+        <InstallButton
+          label={label}
+          target={target}
+          asset={asset}
+          mode="clean"
+          resetAsset={resetAsset}
+        />
       )}
       <a
         href={asset.downloadUrl}
