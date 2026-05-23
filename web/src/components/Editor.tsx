@@ -6,6 +6,7 @@
  *   * `KeycodePicker`     — modal opened by clicking a key cell
  *   * `MacroEditor`       — macro buffer editor
  *   * `ComboEditor`       — combo entries editor
+ *   * `MorseEditor`       — tap-dance / morse editor
  *   * `KobuSettingsPanel` — kobu-specific runtime knobs
  *
  * Subscribes to the connection store so we know when to attach
@@ -19,6 +20,7 @@ import { useConnectionStore } from '../state/connection';
 import { isCellDirty, useEditorStore } from '../state/editor';
 import { useKobuSettingsStore } from '../state/kobuSettings';
 import { useMacroStore } from '../state/macros';
+import { useMorseStore } from '../state/morses';
 import { BluetoothPanel } from './BluetoothPanel';
 import { ComboEditor } from './ComboEditor';
 import { EditorToolbar } from './EditorToolbar';
@@ -26,6 +28,7 @@ import { KeycodePicker } from './KeycodePicker';
 import { KeymapView } from './KeymapView';
 import { KobuSettingsPanel } from './KobuSettingsPanel';
 import { MacroEditor } from './MacroEditor';
+import { MorseEditor } from './MorseEditor';
 
 export function Editor() {
   const connection = useConnectionStore((s) => s.state);
@@ -35,6 +38,8 @@ export function Editor() {
   const detachMacros = useMacroStore((s) => s.detach);
   const attachCombos = useComboStore((s) => s.attach);
   const detachCombos = useComboStore((s) => s.detach);
+  const attachMorses = useMorseStore((s) => s.attach);
+  const detachMorses = useMorseStore((s) => s.detach);
   const attachKobu = useKobuSettingsStore((s) => s.attach);
   const detachKobu = useKobuSettingsStore((s) => s.detach);
 
@@ -45,11 +50,13 @@ export function Editor() {
       void attach(connection.transport, connection.handshake.definition);
       void attachMacros(connection.transport);
       void attachCombos(connection.transport);
+      void attachMorses(connection.transport);
       void attachKobu(connection.transport);
     } else {
       detach();
       detachMacros();
       detachCombos();
+      detachMorses();
       detachKobu();
     }
   }, [
@@ -60,6 +67,8 @@ export function Editor() {
     detachMacros,
     attachCombos,
     detachCombos,
+    attachMorses,
+    detachMorses,
     attachKobu,
     detachKobu,
   ]);
@@ -152,6 +161,8 @@ export function Editor() {
       <MacroEditor definition={definition} layerCount={dimensions.layers} />
 
       <ComboEditor definition={definition} layerCount={dimensions.layers} />
+
+      <MorseEditor definition={definition} layerCount={dimensions.layers} />
 
       <KobuSettingsPanel />
     </section>

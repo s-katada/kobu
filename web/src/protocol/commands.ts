@@ -576,6 +576,92 @@ function readU16LE(buf: Uint8Array, offset: number): number {
   return (buf[offset] ?? 0) | ((buf[offset + 1] ?? 0) << 8);
 }
 
+// ─── Morse (tap-dance) builders ───────────────────────────────────────────
+
+/**
+ * Vial `DynamicEntryOp / MorseGet` — fetch one morse / tap-dance entry.
+ *
+ *   packet[2] = 0x01
+ *   packet[3] = morse index
+ *
+ * Reply layout (per rmk-0.8.2/src/host/via/vial.rs::DynamicVialMorseGet):
+ *   reply[0]      = return code (0 = success)
+ *   reply[1..3]   = on-tap keycode (LE u16)
+ *   reply[3..5]   = on-hold keycode (LE u16)
+ *   reply[5..7]   = on-double-tap keycode (LE u16)
+ *   reply[7..9]   = on-hold-after-tap keycode (LE u16)
+ *   reply[9..11]  = tap term in ms (LE u16; vial-gui labels this
+ *                   `tapping_term`, RMK calls it both hold_timeout and
+ *                   gap_timeout — Set writes the same value to both)
+ */
+export function buildMorseGet(index: number): VialPacket {
+  const p = emptyPacket();
+  p[0] = ViaCommand.Vial;
+  p[1] = VialSubCommand.DynamicEntryOp;
+  p[2] = VialDynamic.MorseGet;
+  p[3] = index & 0xff;
+  return p;
+}
+
+/**
+ * Vial `DynamicEntryOp / MorseSet` — overwrite one morse entry.
+ *
+ *   packet[2]      = 0x02
+ *   packet[3]      = morse index
+ *   packet[4..6]   = on-tap          (LE u16)
+ *   packet[6..8]   = on-hold         (LE u16)
+ *   packet[8..10]  = on-double-tap   (LE u16)
+ *   packet[10..12] = on-hold-after-tap (LE u16)
+ *   packet[12..14] = tap term in ms  (LE u16)
+ */
+export function buildMorseSet(index: number, entry: MorseEntry): VialPacket {
+  const p = emptyPacket();
+  p[0] = ViaCommand.Vial;
+  p[1] = VialSubCommand.DynamicEntryOp;
+  p[2] = VialDynamic.MorseSet;
+  p[3] = index & 0xff;
+  writeU16LE(p, 4, entry.tap);
+  writeU16LE(p, 6, entry.hold);
+  writeU16LE(p, 8, entry.doubleTap);
+  writeU16LE(p, 10, entry.holdAfterTap);
+  writeU16LE(p, 12, entry.tapTermMs);
+  return p;
+}
+
+export interface MorseEntry {
+  /** Single tap / press-release. */
+  tap: number;
+  /** Held past `tapTermMs`. */
+  hold: number;
+  /** Two taps inside `tapTermMs`. */
+  doubleTap: number;
+  /** Tap then hold (a single "rolling" action). */
+  holdAfterTap: number;
+  /** Tap-vs-hold decision window. RMK Set writes this into both
+   *  hold_timeout and gap_timeout — the firmware does not expose them
+   *  independently on the wire. */
+  tapTermMs: number;
+}
+
+export function parseMorseGet(reply: VialPacket): MorseEntry {
+  return {
+    tap: readU16LE(reply, 1),
+    hold: readU16LE(reply, 3),
+    doubleTap: readU16LE(reply, 5),
+    holdAfterTap: readU16LE(reply, 7),
+    tapTermMs: readU16LE(reply, 9),
+  };
+}
+
+/**
+ * True iff every keycode slot is zero. The firmware silently keeps
+ * the entry in this case (unlike combos, which become `None`), but
+ * the slot is effectively a no-op — the UI surfaces it as unused.
+ */
+export function isMorseEmpty(entry: MorseEntry): boolean {
+  return entry.tap === 0 && entry.hold === 0 && entry.doubleTap === 0 && entry.holdAfterTap === 0;
+}
+
 // ─── Byte helpers ─────────────────────────────────────────────────────────
 //
 // Stay tied to indexed access so noUncheckedIndexedAccess gives us a
