@@ -26,11 +26,14 @@ use core::cell::RefCell;
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
+use embassy_time::Instant;
 use rmk::event::{Axis, Event};
 use rmk::hid::Report;
 use rmk::input_device::{InputDevice, InputProcessor, ProcessResult};
 use rmk::keymap::KeyMap;
 use usbd_hid::descriptor::MouseReport;
+
+use crate::config;
 
 /// One-shot pulse emitted by [`PointerProcessor`] every time the peripheral
 /// half forwards a Joystick(X,Y) event. The status-LED controller in
@@ -78,6 +81,10 @@ fn clamp_i8(value: i16) -> i8 {
 /// wheel deltas. Both axes are summed and negated into the vertical
 /// wheel; `pan` is suppressed. See the LEFT-only commit history for the
 /// rationale on this combined-vertical mapping.
+///
+/// Throttling / invert come from `crate::config` so a future Vial
+/// `CustomSetValue` write retunes them at runtime without a reboot.
+/// Defaults (no throttle, no invert) match the previous behaviour.
 pub struct ScrollProcessor<
     'a,
     const ROW: usize,
@@ -86,13 +93,22 @@ pub struct ScrollProcessor<
     const NUM_ENCODER: usize,
 > {
     keymap: &'a RefCell<KeyMap<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>>,
+    /// Earliest `Instant` at which the next scroll report may be
+    /// emitted. `None` until the first report goes out. Compared
+    /// against `Instant::now()` on every event; throttled reports are
+    /// dropped (NOT accumulated — for the trackball use case "skip
+    /// some" feels better than "send a giant burst later").
+    next_emit_at: Option<Instant>,
 }
 
 impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCODER: usize>
     ScrollProcessor<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>
 {
     pub fn new(keymap: &'a RefCell<KeyMap<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>>) -> Self {
-        Self { keymap }
+        Self {
+            keymap,
+            next_emit_at: None,
+        }
     }
 }
 
@@ -122,11 +138,31 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                 if !matched {
                     return ProcessResult::Continue(event);
                 }
+
+                // Throttle: drop reports that arrive faster than the
+                // configured interval allows. The trackball's native
+                // rate can be too fast for some applications, and
+                // dropping intermediate samples feels better than
+                // accumulating them into one big late wheel jump.
+                let throttle = config::scroll_throttle();
+                let now = Instant::now();
+                if let Some(when) = self.next_emit_at {
+                    if when > now {
+                        return ProcessResult::Stop;
+                    }
+                }
+                self.next_emit_at = Some(now + throttle);
+
+                // Apply per-axis invert before the H+V sum, so the
+                // user-facing semantics ("invert vertical scroll")
+                // stay intuitive regardless of the H+V mixing rule.
+                let h = if config::scroll_invert_x() { -horizontal } else { horizontal };
+                let v = if config::scroll_invert_y() { -vertical } else { vertical };
                 let report = MouseReport {
                     buttons: 0,
                     x: 0,
                     y: 0,
-                    wheel: clamp_i8(-(horizontal + vertical)),
+                    wheel: clamp_i8(-(h + v)),
                     pan: 0,
                 };
                 self.send_report(Report::MouseReport(report)).await;
