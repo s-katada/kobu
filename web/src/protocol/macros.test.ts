@@ -46,9 +46,9 @@ describe('encodeAction', () => {
     expect(Array.from(encodeAction({ kind: 'text', byte: 0x48 }))).toEqual([0x48]);
   });
   it('unsupported passes raw bytes through verbatim', () => {
-    expect(Array.from(encodeAction({ kind: 'unsupported', bytes: [0x01, 0x05, 0x12, 0x34] }))).toEqual([
-      0x01, 0x05, 0x12, 0x34,
-    ]);
+    expect(
+      Array.from(encodeAction({ kind: 'unsupported', bytes: [0x01, 0x05, 0x12, 0x34] })),
+    ).toEqual([0x01, 0x05, 0x12, 0x34]);
   });
 });
 
@@ -60,9 +60,15 @@ describe('encodeSequence', () => {
       { kind: 'up', keycode: 0xe1 },
     ];
     expect(Array.from(encodeSequence(seq))).toEqual([
-      0x01, 0x02, 0xe1, // down LShift
-      0x01, 0x01, 0x14, // tap Q
-      0x01, 0x03, 0xe1, // up LShift
+      0x01,
+      0x02,
+      0xe1, // down LShift
+      0x01,
+      0x01,
+      0x14, // tap Q
+      0x01,
+      0x03,
+      0xe1, // up LShift
     ]);
   });
 });
@@ -75,9 +81,22 @@ describe('encodeBuffer', () => {
     ];
     const buf = encodeBuffer(sequences, 16);
     expect(Array.from(buf)).toEqual([
-      0x01, 0x01, 0x04, 0x00, // first macro + terminator
-      0x01, 0x01, 0x05, 0x00, // second macro + terminator
-      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // padding
+      0x01,
+      0x01,
+      0x04,
+      0x00, // first macro + terminator
+      0x01,
+      0x01,
+      0x05,
+      0x00, // second macro + terminator
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00, // padding
     ]);
   });
   it('empty sequences contribute just a 0x00', () => {
@@ -92,9 +111,15 @@ describe('encodeBuffer', () => {
 describe('decodeSequence', () => {
   it('reads tap/press/release until 0x00', () => {
     const bytes = new Uint8Array([
-      0x01, 0x02, 0xe1, // down LShift
-      0x01, 0x01, 0x04, // tap A
-      0x01, 0x03, 0xe1, // up LShift
+      0x01,
+      0x02,
+      0xe1, // down LShift
+      0x01,
+      0x01,
+      0x04, // tap A
+      0x01,
+      0x03,
+      0xe1, // up LShift
       0x00,
     ]);
     const { actions, nextStart } = decodeSequence(bytes, 0);
@@ -138,17 +163,20 @@ describe('decodeSequence', () => {
 describe('decodeBuffer', () => {
   it('splits a buffer into the requested number of macros', () => {
     const bytes = new Uint8Array([
-      0x01, 0x01, 0x04, 0x00, // tap A; macro 0
-      0x48, 0x00, // text 'H'; macro 1
+      0x01,
+      0x01,
+      0x04,
+      0x00, // tap A; macro 0
+      0x48,
+      0x00, // text 'H'; macro 1
       0x00, // macro 2 = empty
-      0x00, 0x00, 0x00, 0x00, // padding
+      0x00,
+      0x00,
+      0x00,
+      0x00, // padding
     ]);
     const macros = decodeBuffer(bytes, 3);
-    expect(macros).toEqual([
-      [{ kind: 'tap', keycode: 0x04 }],
-      [{ kind: 'text', byte: 0x48 }],
-      [],
-    ]);
+    expect(macros).toEqual([[{ kind: 'tap', keycode: 0x04 }], [{ kind: 'text', byte: 0x48 }], []]);
   });
   it('returns empty macros for slots past the last terminator', () => {
     const bytes = new Uint8Array(8);

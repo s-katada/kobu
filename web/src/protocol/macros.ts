@@ -147,7 +147,7 @@ export function decodeSequence(
         case 0x04: {
           const bA = buffer[i + 2] ?? 1;
           const bB = buffer[i + 3] ?? 1;
-          const ms = (Math.max(1, bA) - 1) + (Math.max(1, bB) - 1) * 255;
+          const ms = Math.max(1, bA) - 1 + (Math.max(1, bB) - 1) * 255;
           actions.push({ kind: 'delay', ms });
           i += 4;
           continue;
