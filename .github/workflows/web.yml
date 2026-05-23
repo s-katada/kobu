@@ -68,6 +68,13 @@ jobs:
     needs: ci
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # Override the workflow-level `working-directory: web` default —
+    # this job doesn't run actions/checkout (it's a cheap secret probe
+    # with no source files to consult), so `web/` doesn't exist in
+    # the runner workspace and bash refuses to start.
+    defaults:
+      run:
+        working-directory: .
     outputs:
       cloudflare_configured: ${{ steps.check.outputs.configured }}
     steps:
