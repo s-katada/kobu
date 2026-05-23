@@ -58,6 +58,20 @@ export const VialSubCommand = {
   DynamicEntryOp: 0x0d,
 } as const;
 
+/**
+ * Sub-sub-command ids for `DynamicEntryOp` (= `packet[2]`). Naming
+ * mirrors `rmk-types-0.2.2/src/protocol/vial.rs::VialDynamic`.
+ */
+export const VialDynamic = {
+  GetNumberOfEntries: 0x00,
+  MorseGet: 0x01,
+  MorseSet: 0x02,
+  ComboGet: 0x03,
+  ComboSet: 0x04,
+  KeyOverrideGet: 0x05,
+  KeyOverrideSet: 0x06,
+} as const;
+
 // ─── Builders ─────────────────────────────────────────────────────────────
 
 /**
@@ -441,6 +455,126 @@ export function parseMacroCount(reply: VialPacket): number {
  */
 export function parseMacroBufferSize(reply: VialPacket): number {
   return readU16BE(reply, 1);
+}
+
+// ─── Dynamic-entry builders (combo / morse / key-override) ────────────────
+
+/**
+ * Vial `DynamicEntryOp / GetNumberOfEntries` — query how many slots
+ * the firmware exposes for tap-dance / combo / key-override.
+ *
+ *   packet[2] = 0x00 (sub-sub-id)
+ *
+ * Reply layout:
+ *   reply[0] = tap-dance entries  (RMK clamps `MORSE_MAX_NUM` to 255)
+ *   reply[1] = combo entries      (`COMBO_MAX_NUM`; kobu = 16)
+ *   reply[2] = key-override entries (RMK 0.8 hardcodes 0 — TODO upstream)
+ *   reply[31] = caps-word enabled flag
+ */
+export function buildGetNumberOfEntries(): VialPacket {
+  const p = emptyPacket();
+  p[0] = ViaCommand.Vial;
+  p[1] = VialSubCommand.DynamicEntryOp;
+  p[2] = VialDynamic.GetNumberOfEntries;
+  return p;
+}
+
+/**
+ * Vial `DynamicEntryOp / ComboGet` — fetch one combo entry.
+ *
+ *   packet[2] = 0x03
+ *   packet[3] = combo index
+ *
+ * Reply (per `rmk-0.8.2/src/host/via/vial.rs::DynamicVialComboGet`):
+ *   reply[0]      = return code (0 = success)
+ *   reply[1..9]   = 4 input keycodes, each LE u16
+ *   reply[9..11]  = output keycode, LE u16
+ *
+ * An entry with all-zero inputs AND all-zero output is treated as
+ * "disabled" by the firmware (`Combo` becomes `None` internally).
+ */
+export function buildComboGet(index: number): VialPacket {
+  const p = emptyPacket();
+  p[0] = ViaCommand.Vial;
+  p[1] = VialSubCommand.DynamicEntryOp;
+  p[2] = VialDynamic.ComboGet;
+  p[3] = index & 0xff;
+  return p;
+}
+
+/**
+ * Vial `DynamicEntryOp / ComboSet` — overwrite one combo entry.
+ *
+ *   packet[2]      = 0x04
+ *   packet[3]      = combo index
+ *   packet[4..12]  = 4 input keycodes, each LE u16
+ *   packet[12..14] = output keycode, LE u16
+ *
+ * Reply: `reply[0]` is the return code (0 = success). RMK persists
+ * the combo to flash before responding.
+ */
+export function buildComboSet(
+  index: number,
+  inputs: readonly number[],
+  output: number,
+): VialPacket {
+  if (inputs.length > 4) {
+    throw new RangeError(`combo inputs must be ≤ 4, got ${inputs.length}`);
+  }
+  const p = emptyPacket();
+  p[0] = ViaCommand.Vial;
+  p[1] = VialSubCommand.DynamicEntryOp;
+  p[2] = VialDynamic.ComboSet;
+  p[3] = index & 0xff;
+  for (let i = 0; i < 4; i++) {
+    const kc = inputs[i] ?? 0;
+    writeU16LE(p, 4 + i * 2, kc);
+  }
+  writeU16LE(p, 12, output);
+  return p;
+}
+
+/** Total slot counts surfaced by `GetNumberOfEntries`. */
+export interface DynamicEntryCounts {
+  tapDance: number;
+  combo: number;
+  keyOverride: number;
+  capsWordEnabled: boolean;
+}
+
+export function parseNumberOfEntries(reply: VialPacket): DynamicEntryCounts {
+  return {
+    tapDance: reply[0] ?? 0,
+    combo: reply[1] ?? 0,
+    keyOverride: reply[2] ?? 0,
+    capsWordEnabled: (reply[31] ?? 0) !== 0,
+  };
+}
+
+export interface ComboEntry {
+  /** 4 input keycodes — unused slots are 0. */
+  inputs: [number, number, number, number];
+  /** Output keycode (0 = disabled / "no" key). */
+  output: number;
+}
+
+export function parseComboGet(reply: VialPacket): ComboEntry {
+  return {
+    inputs: [readU16LE(reply, 1), readU16LE(reply, 3), readU16LE(reply, 5), readU16LE(reply, 7)],
+    output: readU16LE(reply, 9),
+  };
+}
+
+/**
+ * True iff every slot is zero — the firmware treats this as "disabled"
+ * and turns the slot into `None` internally.
+ */
+export function isComboEmpty(entry: ComboEntry): boolean {
+  return entry.inputs.every((k) => k === 0) && entry.output === 0;
+}
+
+function readU16LE(buf: Uint8Array, offset: number): number {
+  return (buf[offset] ?? 0) | ((buf[offset + 1] ?? 0) << 8);
 }
 
 // ─── Byte helpers ─────────────────────────────────────────────────────────
