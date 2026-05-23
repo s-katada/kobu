@@ -149,6 +149,25 @@ describe('editing', () => {
     expect(useMorseStore.getState().local[0]?.hold).toBe(0x00e0);
     expect(useMorseStore.getState().local[0]?.doubleTap).toBe(0x0029);
   });
+
+  it('括弧ペア preset encodes Shift+9 / Shift+0 as WM (not MT)', () => {
+    // Regression: an earlier draft used 0x202f / 0x2030 which land in
+    // the MT (ModTap) range (0x2000..0x3FFF) and would have been
+    // interpreted as `MT([, no-mod)` / `MT(], no-mod)` — producing
+    // `[` / `]` with broken modtap semantics, not parentheses.
+    const preset = MORSE_PRESETS.find((p) => p.name.includes('括弧'));
+    if (!preset) throw new Error('括弧ペア preset missing');
+    useMorseStore.getState().applyPreset(0, preset);
+    const entry = useMorseStore.getState().local[0];
+    // 0x0226 = (MOD_SHIFT << 8) | HID_KC_9. Within the WM range
+    // (0x0100..0x1FFF) and decodes as "Shift + 9" = (.
+    expect(entry?.tap).toBe(0x0226);
+    // 0x0227 = Shift + 0 = ).
+    expect(entry?.doubleTap).toBe(0x0227);
+    // Neither value falls in the MT range.
+    expect((entry?.tap ?? 0) < 0x2000).toBe(true);
+    expect((entry?.doubleTap ?? 0) < 0x2000).toBe(true);
+  });
 });
 
 describe('selectors', () => {
