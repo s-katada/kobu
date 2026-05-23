@@ -59,12 +59,39 @@ jobs:
           path: web/dist
           if-no-files-found: error
 
+  # Gate-only job: cheap to spin up, and the deploy job is `needs:` it.
+  # We can't put `secrets` context in a job-level `if:` (GitHub Actions
+  # forbids it), so this is the conventional workaround — read the
+  # secret in a step, expose its presence as a job output, and gate
+  # the deploy job on the output.
+  check-deploy-secrets:
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      cloudflare_configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          ACCT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "${TOKEN:-}" ] && [ -n "${ACCT:-}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Cloudflare Workers deploy skipped: CLOUDFLARE_API_TOKEN and/or CLOUDFLARE_ACCOUNT_ID are not configured. Set them under Settings → Secrets and variables → Actions to enable production deployments. CI (lint / typecheck / test / build) still runs on every push."
+          fi
+
   deploy:
     # Only deploy from main; PRs don't get production. (Preview
     # deployments would need a separate wrangler env + a different
     # routing config — left as a follow-up.)
-    needs: ci
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [ci, check-deploy-secrets]
+    if: |
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.check-deploy-secrets.outputs.cloudflare_configured == 'true'
     runs-on: ubuntu-latest
     environment: production
     defaults:
