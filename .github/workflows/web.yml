@@ -58,3 +58,47 @@ jobs:
           name: kobu-config-dist
           path: web/dist
           if-no-files-found: error
+
+  deploy:
+    # Only deploy from main; PRs don't get production. (Preview
+    # deployments would need a separate wrangler env + a different
+    # routing config — left as a follow-up.)
+    needs: ci
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: nix develop ..#web --command pnpm install --frozen-lockfile
+
+      - name: Build production bundle
+        run: nix develop ..#web --command pnpm build
+
+      - name: Deploy to Cloudflare Workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        # Requires two repo secrets:
+        #   CLOUDFLARE_API_TOKEN     — token scoped to "Edit Workers
+        #                              Scripts" + "Workers KV Storage"
+        #                              for the kobu-config worker.
+        #   CLOUDFLARE_ACCOUNT_ID    — your CF account id.
+        # The token is read-only on the build side; revoke from the CF
+        # dashboard if it ever leaks.
+        run: nix develop ..#web --command pnpm exec wrangler deploy
