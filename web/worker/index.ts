@@ -32,13 +32,18 @@ const RELEASE_PREFIX = '/__release';
  * - `default-src 'self'` blocks everything that isn't allowed below.
  * - `script-src 'self'` — no inline scripts and no third-party
  *   bundles. Vite emits hashed JS files we serve from our own origin.
- * - `style-src 'self' 'unsafe-inline'` — the SVG keymap renderer and
- *   a few components use inline `style=""` for per-cell positioning.
- *   We accept the broader exposure: the editor has no user-controlled
- *   string interpolation that flows into a `style=` attribute.
- * - `connect-src 'self'` — the `/__release` proxy is same-origin from
- *   the browser's perspective, so this allows the firmware install
- *   flow.
+ * - `style-src 'self' 'unsafe-inline'` — `InstallButton.tsx` writes
+ *   the firmware-install progress bar width with an inline
+ *   `style={{ width: '${percent}%' }}`. That's the only inline
+ *   style in the bundle today. We accept the broader exposure: no
+ *   user-controlled string flows into `style=`.
+ * - `connect-src 'self' https://api.github.com` —
+ *   `/__release` (Worker proxy) is same-origin, but the firmware
+ *   install code also fetches `https://api.github.com/repos/...`
+ *   directly to list releases. GitHub's API does send proper CORS
+ *   headers (unlike Release downloads, which is why those are
+ *   proxied), so we allow that origin directly rather than adding
+ *   another proxy hop.
  * - `worker-src 'self'` — the PWA service worker.
  * - `frame-ancestors 'none'` — block clickjacking entirely.
  */
@@ -47,7 +52,7 @@ const CSP = [
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data:",
-  "connect-src 'self'",
+  "connect-src 'self' https://api.github.com",
   "worker-src 'self'",
   "manifest-src 'self'",
   "font-src 'self'",
@@ -109,11 +114,24 @@ export default {
       }
 
       const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
-      return fetch(target.toString(), {
+      const upstream = await fetch(target.toString(), {
         method: request.method,
         headers,
         body: hasBody ? request.body : undefined,
         redirect: 'follow',
+      });
+      // GitHub serves a CSP on its own HTML responses. For a UF2
+      // binary the body is opaque so the header is harmless, but we
+      // strip it defensively in case GitHub ever proxies an HTML
+      // error page through this path — letting their CSP through
+      // would override ours for that response.
+      const proxiedHeaders = new Headers(upstream.headers);
+      proxiedHeaders.delete('content-security-policy');
+      proxiedHeaders.delete('content-security-policy-report-only');
+      return new Response(upstream.body, {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers: proxiedHeaders,
       });
     }
 
