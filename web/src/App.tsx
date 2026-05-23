@@ -2,6 +2,7 @@ import { ConnectButton } from './components/ConnectButton';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { Editor } from './components/Editor';
 import { FirmwareSection } from './components/FirmwareSection';
+import { PwaUpdateToast } from './components/PwaUpdateToast';
 import { useConnectionStore } from './state/connection';
 
 export default function App() {
@@ -39,6 +40,7 @@ export default function App() {
 
         <FirmwareSection />
       </main>
+      <PwaUpdateToast />
     </div>
   );
 }
