@@ -4,21 +4,23 @@
  *   * `KeymapView`        — 4×10 split SVG
  *   * `BluetoothPanel`    — Layer 3 BLE side panel (only on layer 3)
  *   * `KeycodePicker`     — modal opened by clicking a key cell
- *   * `MacroEditor`       — macro buffer editor (separate save flow)
+ *   * `MacroEditor`       — macro buffer editor
+ *   * `ComboEditor`       — combo entries editor
  *   * `KobuSettingsPanel` — kobu-specific runtime knobs
  *
  * Subscribes to the connection store so we know when to attach
  * (transitions to `ready`) and detach (transition out of `ready`).
- * The editor / macro / kobu-settings stores each own their slice of
- * state from there on.
+ * The per-feature stores each own their slice of state from there on.
  */
 
 import { useEffect, useState } from 'react';
+import { useComboStore } from '../state/combos';
 import { useConnectionStore } from '../state/connection';
 import { isCellDirty, useEditorStore } from '../state/editor';
 import { useKobuSettingsStore } from '../state/kobuSettings';
 import { useMacroStore } from '../state/macros';
 import { BluetoothPanel } from './BluetoothPanel';
+import { ComboEditor } from './ComboEditor';
 import { EditorToolbar } from './EditorToolbar';
 import { KeycodePicker } from './KeycodePicker';
 import { KeymapView } from './KeymapView';
@@ -31,6 +33,8 @@ export function Editor() {
   const detach = useEditorStore((s) => s.detach);
   const attachMacros = useMacroStore((s) => s.attach);
   const detachMacros = useMacroStore((s) => s.detach);
+  const attachCombos = useComboStore((s) => s.attach);
+  const detachCombos = useComboStore((s) => s.detach);
   const attachKobu = useKobuSettingsStore((s) => s.attach);
   const detachKobu = useKobuSettingsStore((s) => s.detach);
 
@@ -40,13 +44,25 @@ export function Editor() {
     if (connection.kind === 'ready') {
       void attach(connection.transport, connection.handshake.definition);
       void attachMacros(connection.transport);
+      void attachCombos(connection.transport);
       void attachKobu(connection.transport);
     } else {
       detach();
       detachMacros();
+      detachCombos();
       detachKobu();
     }
-  }, [connection, attach, detach, attachMacros, detachMacros, attachKobu, detachKobu]);
+  }, [
+    connection,
+    attach,
+    detach,
+    attachMacros,
+    detachMacros,
+    attachCombos,
+    detachCombos,
+    attachKobu,
+    detachKobu,
+  ]);
 
   const phase = useEditorStore((s) => s.phase);
   const definition = useEditorStore((s) => s.definition);
@@ -134,6 +150,8 @@ export function Editor() {
       )}
 
       <MacroEditor definition={definition} layerCount={dimensions.layers} />
+
+      <ComboEditor definition={definition} layerCount={dimensions.layers} />
 
       <KobuSettingsPanel />
     </section>
