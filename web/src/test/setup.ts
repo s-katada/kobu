@@ -1,4 +1,8 @@
 import '@testing-library/jest-dom/vitest';
+// `fake-indexeddb/auto` registers IndexedDB / IDBKeyRange shims on
+// globalThis. jsdom doesn't ship IDB, and `install/handleStore.ts`
+// depends on it — without this shim those tests can't run.
+import 'fake-indexeddb/auto';
 import { vi } from 'vitest';
 
 // `virtual:pwa-register/react` is a virtual module emitted by
