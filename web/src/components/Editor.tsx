@@ -15,12 +15,14 @@ import { useComboStore } from '../state/combos';
 import { useConnectionStore } from '../state/connection';
 import { isCellDirty, useEditorStore } from '../state/editor';
 import { useMacroStore } from '../state/macros';
+import { useMorseStore } from '../state/morses';
 import { BluetoothPanel } from './BluetoothPanel';
 import { ComboEditor } from './ComboEditor';
 import { EditorToolbar } from './EditorToolbar';
 import { KeycodePicker } from './KeycodePicker';
 import { KeymapView } from './KeymapView';
 import { MacroEditor } from './MacroEditor';
+import { MorseEditor } from './MorseEditor';
 
 export function Editor() {
   const connection = useConnectionStore((s) => s.state);
@@ -30,21 +32,35 @@ export function Editor() {
   const detachMacros = useMacroStore((s) => s.detach);
   const attachCombos = useComboStore((s) => s.attach);
   const detachCombos = useComboStore((s) => s.detach);
+  const attachMorses = useMorseStore((s) => s.attach);
+  const detachMorses = useMorseStore((s) => s.detach);
 
   // Attach when the connection enters `ready`; detach when it leaves.
-  // The macro / combo stores run alongside the keymap store — same
-  // transport, independent diff state.
+  // The macro / combo / morse stores run alongside the keymap store —
+  // same transport, independent diff state.
   useEffect(() => {
     if (connection.kind === 'ready') {
       void attach(connection.transport, connection.handshake.definition);
       void attachMacros(connection.transport);
       void attachCombos(connection.transport);
+      void attachMorses(connection.transport);
     } else {
       detach();
       detachMacros();
       detachCombos();
+      detachMorses();
     }
-  }, [connection, attach, detach, attachMacros, detachMacros, attachCombos, detachCombos]);
+  }, [
+    connection,
+    attach,
+    detach,
+    attachMacros,
+    detachMacros,
+    attachCombos,
+    detachCombos,
+    attachMorses,
+    detachMorses,
+  ]);
 
   const phase = useEditorStore((s) => s.phase);
   const definition = useEditorStore((s) => s.definition);
@@ -134,6 +150,8 @@ export function Editor() {
       <MacroEditor definition={definition} layerCount={dimensions.layers} />
 
       <ComboEditor definition={definition} layerCount={dimensions.layers} />
+
+      <MorseEditor definition={definition} layerCount={dimensions.layers} />
     </section>
   );
 }
