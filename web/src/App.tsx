@@ -1,12 +1,40 @@
+import { useEffect, useMemo, useState } from 'react';
 import { ConnectButton } from './components/ConnectButton';
 import { ConnectionStatus } from './components/ConnectionStatus';
 import { Editor } from './components/Editor';
 import { FirmwareSection } from './components/FirmwareSection';
+import { UnsupportedBrowserSplash } from './components/UnsupportedBrowserSplash';
+import { detectEnvironment, refineBrave, unsupportedReason } from './lib/browser';
 import { useConnectionStore } from './state/connection';
 
 export default function App() {
   const connectionKind = useConnectionStore((s) => s.state.kind);
   const showEditor = connectionKind === 'ready';
+
+  // Detect once at mount; refine the Chrome→Brave async check after
+  // the synchronous detection lands. Brave reports as Chrome in the
+  // UA string, so this is the only path that can correct it.
+  const initialEnv = useMemo(() => detectEnvironment(), []);
+  const [env, setEnv] = useState(initialEnv);
+  useEffect(() => {
+    void refineBrave(initialEnv).then((next) => {
+      if (next.browser !== initialEnv.browser) setEnv(next);
+    });
+  }, [initialEnv]);
+
+  const unsupported = unsupportedReason(env);
+
+  // Block the rest of the app for environments that literally cannot
+  // talk to kobu. The splash explains what to do; rendering the
+  // normal layout would just dead-end at the connect button with no
+  // recovery path.
+  if (unsupported) {
+    return (
+      <div className="min-h-full bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
+        <UnsupportedBrowserSplash env={env} reason={unsupported} />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-full bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
