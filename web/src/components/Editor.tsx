@@ -13,24 +13,32 @@
 import { useEffect, useState } from 'react';
 import { useConnectionStore } from '../state/connection';
 import { isCellDirty, useEditorStore } from '../state/editor';
+import { useKobuSettingsStore } from '../state/kobuSettings';
 import { BluetoothPanel } from './BluetoothPanel';
 import { EditorToolbar } from './EditorToolbar';
 import { KeycodePicker } from './KeycodePicker';
 import { KeymapView } from './KeymapView';
+import { KobuSettingsPanel } from './KobuSettingsPanel';
 
 export function Editor() {
   const connection = useConnectionStore((s) => s.state);
   const attach = useEditorStore((s) => s.attach);
   const detach = useEditorStore((s) => s.detach);
+  const attachKobu = useKobuSettingsStore((s) => s.attach);
+  const detachKobu = useKobuSettingsStore((s) => s.detach);
 
   // Attach when the connection enters `ready`; detach when it leaves.
+  // The kobu settings store runs alongside the keymap store on the
+  // same transport.
   useEffect(() => {
     if (connection.kind === 'ready') {
       void attach(connection.transport, connection.handshake.definition);
+      void attachKobu(connection.transport);
     } else {
       detach();
+      detachKobu();
     }
-  }, [connection, attach, detach]);
+  }, [connection, attach, detach, attachKobu, detachKobu]);
 
   const phase = useEditorStore((s) => s.phase);
   const definition = useEditorStore((s) => s.definition);
@@ -116,6 +124,8 @@ export function Editor() {
           onClose={() => setPickerOpen(false)}
         />
       )}
+
+      <KobuSettingsPanel />
     </section>
   );
 }
