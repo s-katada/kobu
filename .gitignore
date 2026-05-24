@@ -28,3 +28,10 @@ pcb/**/erc-report.txt
 # KiCad: rolling backups (auto-generated, large binary churn)
 pcb/**/*-backups/
 pcb/**/production/backups/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
