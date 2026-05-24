@@ -42,7 +42,7 @@ export default function App() {
       <header className="border-b border-zinc-200 dark:border-zinc-800 px-6 py-4">
         <div className="flex items-baseline justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">kobu-config</h1>
+            <h1 className="text-xl font-semibold tracking-tight">kobu-editor</h1>
             <p className="text-sm text-zinc-500 dark:text-zinc-400">
               kobu スプリットキーボード向けの Web キーマップエディタ
             </p>

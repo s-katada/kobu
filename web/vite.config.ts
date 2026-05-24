@@ -9,7 +9,7 @@ export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
-    // kobu-config is a pure client-side app — all real work happens
+    // kobu-editor is a pure client-side app — all real work happens
     // over WebHID, which is local. Once the bundle is cached, the
     // editor works offline. `registerType: 'prompt'` surfaces a toast
     // when a new SW is ready instead of silently reloading mid-edit.
@@ -17,8 +17,8 @@ export default defineConfig({
       registerType: 'prompt',
       includeAssets: ['favicon.svg', 'icons.svg'],
       manifest: {
-        name: 'kobu-config',
-        short_name: 'kobu-config',
+        name: 'kobu-editor',
+        short_name: 'kobu-editor',
         description: 'Web keymap editor for the kobu split keyboard. Works offline once installed.',
         theme_color: '#863bff',
         background_color: '#fafafa',

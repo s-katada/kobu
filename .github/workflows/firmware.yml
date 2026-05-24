@@ -97,7 +97,7 @@ jobs:
           if-no-files-found: error
 
       # Publish a rolling pre-release tagged `firmware-latest` so the
-      # kobu-config web app can fetch the latest UF2 over the public
+      # kobu-editor web app can fetch the latest UF2 over the public
       # Releases API (no auth needed for public repos). Tag and assets
       # are recreated on every successful main build.
       - name: Publish firmware-latest pre-release
@@ -123,7 +123,7 @@ jobs:
           工場出荷状態に戻す: \`*-reset.uf2\` を一度焼くと次回起動時に
           storage の keymap がクリアされます。続けて通常版を焼き直すと
           リリース時点のキーマップ + ペアリング情報維持の状態になります
-          (詳細は kobu-config の「クリーンインストール」ボタン)。
+          (詳細は kobu-editor の「クリーンインストール」ボタン)。
           NOTE
           )
           # Delete the previous release (and its moving tag) if present so

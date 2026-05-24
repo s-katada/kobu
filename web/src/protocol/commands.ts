@@ -249,7 +249,7 @@ export function buildEepromReset(): VialPacket {
  * `CustomSetValue` writes to flash. RMK already persists on every
  * write so this is a no-op on kobu, but vial-gui issues it after
  * lighting tweaks and we keep parity for compatibility with any
- * tooling that piggy-backs on the kobu-config transport.
+ * tooling that piggy-backs on the kobu-editor transport.
  */
 export function buildCustomSave(): VialPacket {
   const p = emptyPacket();

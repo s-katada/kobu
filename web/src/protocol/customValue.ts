@@ -34,7 +34,7 @@ import { emptyPacket, type VialPacket } from '../transport/types';
 import type { WebHidTransport } from '../transport/webhid';
 import { readU16BE, ViaCommand } from './commands';
 
-/** kobu-config channel. Must match `firmware/src/config.rs`. */
+/** kobu-editor channel. Must match `firmware/src/config.rs`. */
 export const KOBU_CHANNEL = 0xc0;
 
 /**

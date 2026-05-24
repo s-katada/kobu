@@ -1,5 +1,5 @@
 /**
- * Full-page splash shown when the current browser cannot run kobu-config.
+ * Full-page splash shown when the current browser cannot run kobu-editor.
  *
  * Replaces the normal app layout instead of letting the user reach an
  * Editor that will never work — there is literally no recovery path
@@ -57,7 +57,7 @@ export function UnsupportedBrowserSplash({ env, reason }: UnsupportedBrowserSpla
               なぜ WebHID が必要なのか
             </summary>
             <p className="mt-2 text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
-              kobu-config はキーボードに直接 USB / BLE 経由でキーマップを書き込みます。これには
+              kobu-editor はキーボードに直接 USB / BLE 経由でキーマップを書き込みます。これには
               ブラウザの <code className="font-mono">navigator.hid</code> API
               （WebHID）が必要で、現時点では Chromium 系（Chrome / Edge / Brave / Opera）の
               デスクトップ版と Android Chrome のみが対応しています。クラウドのサーバには
@@ -126,19 +126,19 @@ export function UnsupportedBrowserSplash({ env, reason }: UnsupportedBrowserSpla
 
 const COPY: Record<UnsupportedReason, { title: string; body: string }> = {
   ios: {
-    title: 'iOS では kobu-config を実行できません',
+    title: 'iOS では kobu-editor を実行できません',
     body: 'iOS のすべてのブラウザは WebKit エンジン上で動作し、WebHID API を提供していません。デスクトップ (macOS / Windows / Linux) または Android デバイスから Chromium 系ブラウザでアクセスしてください。',
   },
   safari: {
-    title: 'Safari では kobu-config を実行できません',
+    title: 'Safari では kobu-editor を実行できません',
     body: 'Safari は WebHID API を実装していません。Chromium 系ブラウザ (Chrome / Edge / Brave / Opera) をインストールしてアクセスしてください。',
   },
   firefox: {
-    title: 'Firefox では kobu-config を実行できません',
+    title: 'Firefox では kobu-editor を実行できません',
     body: 'Firefox は WebHID API を実装する予定がありません。Chromium 系ブラウザ (Chrome / Edge / Brave / Opera) をインストールしてアクセスしてください。',
   },
   'no-webhid': {
-    title: 'このブラウザは kobu-config に対応していません',
+    title: 'このブラウザは kobu-editor に対応していません',
     body: 'WebHID API が見つかりませんでした。Chromium 系ブラウザ (Chrome / Edge / Brave / Opera) の最新版を利用するか、お使いのブラウザを最新にアップデートしてください。',
   },
   'insecure-origin': {

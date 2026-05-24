@@ -1,5 +1,5 @@
 /**
- * Macro editor — the Phase 4.1 deliverable for kobu-config.
+ * Macro editor — the Phase 4.1 deliverable for kobu-editor.
  *
  * Layout:
  *

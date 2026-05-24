@@ -55,7 +55,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kobu-config-dist
+          name: kobu-editor-dist
           path: web/dist
           if-no-files-found: error
 
@@ -131,7 +131,7 @@ jobs:
         # Requires two repo secrets:
         #   CLOUDFLARE_API_TOKEN     — token scoped to "Edit Workers
         #                              Scripts" + "Workers KV Storage"
-        #                              for the kobu-config worker.
+        #                              for the kobu-editor worker.
         #   CLOUDFLARE_ACCOUNT_ID    — your CF account id.
         # The token is read-only on the build side; revoke from the CF
         # dashboard if it ever leaks.

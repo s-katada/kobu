@@ -1,4 +1,4 @@
-// Cloudflare Worker entrypoint for the kobu-config SPA.
+// Cloudflare Worker entrypoint for the kobu-editor SPA.
 //
 // Jobs:
 //
@@ -66,7 +66,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Content-Security-Policy': CSP,
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
-  // kobu-config explicitly needs WebHID. Allow it for our own origin
+  // kobu-editor explicitly needs WebHID. Allow it for our own origin
   // only — `()` denies every other unused powerful API.
   'Permissions-Policy': [
     'hid=(self)',

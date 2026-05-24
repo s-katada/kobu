@@ -1,4 +1,4 @@
-# kobu-config (web app)
+# kobu-editor (web app)
 
 Web-based keymap editor for the [kobu](../) split keyboard, served as a
 single-page app. Talks to kobu's central half over USB or BLE-HoG via
@@ -45,7 +45,7 @@ explaining what to install if WebHID is missing.
 1. Connect kobu's **central half** (left half) to your computer with a
    data-capable USB-C cable. The peripheral half does not need to be
    connected.
-2. Open the kobu-config URL in Chrome (or another Chromium browser).
+2. Open the kobu-editor URL in Chrome (or another Chromium browser).
 3. Click **「kobu に接続」** ("Connect to kobu"). The browser pops up a
    device-picker — select kobu and click *Connect*.
 4. The editor loads your current keymap from the device.

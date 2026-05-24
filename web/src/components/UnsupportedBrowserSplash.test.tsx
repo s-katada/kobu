@@ -17,7 +17,7 @@ function env(overrides: Partial<Environment> = {}): Environment {
 describe('UnsupportedBrowserSplash', () => {
   it('renders the Safari-specific copy', () => {
     render(<UnsupportedBrowserSplash env={env({ browser: 'safari' })} reason="safari" />);
-    expect(screen.getByText(/Safari では kobu-config を実行できません/)).toBeTruthy();
+    expect(screen.getByText(/Safari では kobu-editor を実行できません/)).toBeTruthy();
   });
 
   it('renders the Firefox-specific copy', () => {
@@ -30,7 +30,7 @@ describe('UnsupportedBrowserSplash', () => {
   it('renders the iOS copy and points out the WebKit lock-in', () => {
     render(<UnsupportedBrowserSplash env={env({ browser: 'safari', os: 'ios' })} reason="ios" />);
     expect(
-      screen.getByRole('heading', { name: /iOS では kobu-config を実行できません/ }),
+      screen.getByRole('heading', { name: /iOS では kobu-editor を実行できません/ }),
     ).toBeTruthy();
     expect(screen.getAllByText(/WebKit/).length).toBeGreaterThan(0);
   });

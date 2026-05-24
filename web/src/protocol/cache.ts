@@ -10,7 +10,7 @@
  *
  * Schema (single slot, keyed by UID hex):
  *
- *   localStorage["kobu-config:keyboard-def"] = JSON.stringify({
+ *   localStorage["kobu-editor:keyboard-def"] = JSON.stringify({
  *     uidHex: "b9bc09b29d374cea",
  *     definition: { matrix: { rows, cols }, ... }
  *   })
@@ -21,7 +21,7 @@
 
 import type { KeyboardLayoutDef } from './handshake';
 
-const STORAGE_KEY = 'kobu-config:keyboard-def';
+const STORAGE_KEY = 'kobu-editor:keyboard-def';
 
 interface CacheEntry {
   uidHex: string;

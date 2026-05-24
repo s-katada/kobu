@@ -55,7 +55,7 @@ describe('cache round-trip', () => {
   });
 
   it('returns null when the stored payload is corrupt JSON', () => {
-    localStorage.setItem('kobu-config:keyboard-def', '{not-json');
+    localStorage.setItem('kobu-editor:keyboard-def', '{not-json');
     expect(loadCachedDefinition(UID)).toBeNull();
   });
 
