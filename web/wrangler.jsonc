@@ -11,7 +11,5 @@
   "observability": {
     "enabled": true
   },
-  "routes": [
-    { "pattern": "kobu-editor.digletts.dev", "custom_domain": true }
-  ]
+  "routes": [{ "pattern": "kobu-editor.digletts.dev", "custom_domain": true }]
 }
