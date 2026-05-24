@@ -14,19 +14,15 @@ import { InstallError, verifyXiaoBootDirectory, writeUf2 } from './filesystem';
 
 /**
  * GitHub Release downloads from `github.com` don't return CORS
- * headers, so a direct `fetch()` from the browser fails. In dev mode
- * the Vite config proxies `/__release/*` to `https://github.com/*` so
- * the same request becomes same-origin from the browser's point of
- * view. Rewrite the asset URL accordingly when running on localhost.
- *
- * In production we deliberately leave the URL untouched — the
- * existing CORS failure surfaces as a clear error in the UI, which is
- * better than silently retrying through a proxy that may not be
- * configured. Same-origin deployment (gh-pages) is the long-term fix.
+ * headers, so a direct `fetch()` from the browser fails. Both the
+ * dev server (`vite.config.ts`) and the production Worker
+ * (`worker/index.ts`) proxy `/__release/*` to `https://github.com/*`,
+ * making the request same-origin from the browser's point of view.
+ * Rewrite the asset URL accordingly whenever we're running in a
+ * browser context.
  */
-export function rewriteForDevProxy(downloadUrl: string): string {
+export function rewriteForSameOriginProxy(downloadUrl: string): string {
   if (typeof window === 'undefined') return downloadUrl;
-  if (!import.meta.env.DEV) return downloadUrl;
   const url = new URL(downloadUrl);
   if (url.host !== 'github.com') return downloadUrl;
   return `/__release${url.pathname}${url.search}`;
@@ -54,7 +50,7 @@ export async function fetchUf2(
   downloadUrl: string,
   onProgress?: FetchProgress,
 ): Promise<Uint8Array> {
-  const url = rewriteForDevProxy(downloadUrl);
+  const url = rewriteForSameOriginProxy(downloadUrl);
   let res: Response;
   try {
     res = await fetch(url);
