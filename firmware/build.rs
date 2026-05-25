@@ -143,90 +143,128 @@ fn find_rmk_file(rmk_version: &str, rel_path: &str) -> Option<PathBuf> {
     None
 }
 
-/// Replace `BleBatteryServer::run` with a kobu-specific version that:
+/// Replace `rmk-0.8.2/src/ble/battery_service.rs` wholesale with a kobu-flavoured
+/// version that:
 ///
-/// 1. Drops the upstream 30-second first-report timeout (we wait
-///    indefinitely for the first `BatteryState::Normal` so a slow ADC
-///    settle never makes us give up).
-/// 2. Pushes a non-zero sentinel value (last known or 100) on connect
-///    *before* waiting on `BATTERY_UPDATE`. macOS hides the
-///    Bluetooth-menu battery indicator when BAS reads 0%; without a
-///    pre-push the characteristic stays at the trouble_host default 0
-///    until the first real ADC sample lands, which is enough time for
-///    macOS to bind the device without a percentage.
-/// 3. Drops the `wait_until_battery_state_available` keypress gate
-///    (upstream only re-notifies after typing in the last 60s, which
-///    makes a freshly-paired-but-idle keyboard look like it has no
-///    battery).
-/// 4. Adds a 60-second heartbeat so the same value is re-pushed even if
-///    `BATTERY_UPDATE` is silent — this keeps `server.set` writing the
-///    stored characteristic value so macOS GATT reads always see a fresh
-///    timestamp.
+/// 1. Adds the BAS 1.1 `Battery Level Status` characteristic (UUID `0x2BED`)
+///    next to the legacy Battery Level so hosts that understand BAS 1.1 (macOS
+///    Sequoia, iOS 17+) can render a charging icon next to the kobu's
+///    percentage.
+/// 2. Rewrites `BleBatteryServer::run` to push a sentinel value immediately
+///    on connect (macOS won't surface a BAS reading of 0%), drop the upstream
+///    keypress gate, and heartbeat both characteristics every ~10s so VBUS
+///    plug/unplug events get reflected in the Bluetooth menu without waiting
+///    for the user to type a key.
+/// 3. Polls VBUS via `embassy_nrf::pac::POWER.usbregstatus().vbusdetect()` on
+///    every loop iteration — kobu's central is the only place that knows the
+///    USB-power state, and we don't want to pipe a separate signal through
+///    just for this.
+///
+/// We replace the entire upstream `battery_service.rs` body because the
+/// changes touch the `BatteryService` struct, the `BleBatteryServer` type,
+/// the constructor, and the run loop simultaneously — a fragile multi-hunk
+/// find/replace would force us to re-tune every time we tweak one piece.
 fn patch_rmk_battery_service() {
-    const MARKER: &str = "// kobu: BleBatteryServer aggressive-notify patch applied (v2 sentinel 73)";
+    // Increment the version suffix every time the embedded payload changes.
+    const MARKER: &str = "// kobu: battery_service v3 (BAS 1.1 + VBUS charging) applied";
+    // Sentinel that must be present in upstream rmk-0.8.2 — if missing, the
+    // crate has been reorganised and our overwrite would land on the wrong
+    // file.
+    const UPSTREAM_SENTINEL: &str = "use crate::input_device::battery::{BATTERY_UPDATE, BatteryState};";
     const RMK_VERSION: &str = "0.8.2";
 
     let Some(path) = find_rmk_file(RMK_VERSION, "src/ble/battery_service.rs") else {
         println!(
             "cargo:warning=kobu: could not find rmk-{RMK_VERSION} battery_service.rs; \
-             aggressive-notify patch was not applied"
+             v3 patch was not applied"
         );
         return;
     };
 
     println!("cargo:rerun-if-changed={}", path.display());
 
-    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+    let existing = fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!("kobu: failed to read {}: {e}", path.display());
     });
 
-    if contents.contains(MARKER) {
+    if existing.contains(MARKER) {
         return;
     }
 
-    let old_body = r#"    pub(crate) async fn run(&mut self) {
-        // Wait 2 seconds, ensure that gatt server has been started
-        Timer::after_secs(2).await;
+    if !existing.contains(UPSTREAM_SENTINEL) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} battery_service.rs sentinel missing in {}; \
+             upstream may have changed — update firmware/build.rs",
+            path.display()
+        );
+    }
 
-        // First report after connected
-        let first_report = async {
-            loop {
-                if let BatteryState::Normal(level) = BATTERY_UPDATE.wait().await {
-                    if let Err(e) = self.battery_level.notify(self.conn, &level).await {
-                        error!("Failed to notify battery level: {:?}", e);
-                    } else {
-                        return;
-                    }
-                }
-                embassy_time::Timer::after_secs(2).await;
-            }
-        };
+    let new_contents = r##"use embassy_time::Timer;
+use trouble_host::prelude::*;
 
-        // Try to do the first battery report in 30 seconds
-        with_timeout(Duration::from_secs(30), first_report).await.ok();
+use super::ble_server::Server;
+use crate::input_device::battery::{BATTERY_UPDATE, BatteryState};
 
-        // Report the battery level.
-        loop {
-            let battery_state = self.wait_until_battery_state_available().await;
-            // Check if there's latest battery state update
-            if let BatteryState::Normal(level) = BATTERY_UPDATE.try_take().unwrap_or(battery_state)
-                && let Err(e) = self.battery_level.notify(self.conn, &level).await
-            {
-                error!("Failed to notify battery level: {:?}", e);
-            }
+/// Battery service — kobu v3 layout. Includes both the classic BAS 1.0
+/// Battery Level (0x2A19) characteristic and the BAS 1.1 Battery Level
+/// Status (0x2BED) characteristic so hosts that understand BAS 1.1 can
+/// surface a charging icon alongside the percentage.
+#[gatt_service(uuid = service::BATTERY)]
+pub(crate) struct BatteryService {
+    /// Battery Level — u8 percentage 0..=100.
+    #[descriptor(uuid = descriptors::VALID_RANGE, read, value = [0, 100])]
+    #[characteristic(uuid = characteristic::BATTERY_LEVEL, read, notify)]
+    pub(crate) level: u8,
+
+    /// Battery Level Status (BAS 1.1) — 3-byte payload.
+    ///
+    /// Byte 0: `flags` — kobu always sends 0 (no optional fields present;
+    /// the battery level is carried by the legacy 0x2A19 characteristic
+    /// rather than the BAS 1.1 in-band copy).
+    ///
+    /// Bytes 1..3: `power_state` as a little-endian u16 with the standard
+    /// BAS 1.1 bit layout:
+    ///
+    ///   * bit 0      = battery present (always 1 — kobu has a LiPo).
+    ///   * bits 1..2  = wired external power source. 00 = absent, 01 =
+    ///                  present. We set 01 when VBUS is detected (USB
+    ///                  plugged in).
+    ///   * bits 3..4  = wireless external power source. Always 00.
+    ///   * bits 5..6  = battery charge state. 00 = unknown,
+    ///                  01 = charging, 10 = discharging-active,
+    ///                  11 = discharging-inactive. kobu emits 01 when
+    ///                  VBUS is present and 10 otherwise.
+    ///   * bits 7..15 = unused / reserved bits — left zero.
+    #[characteristic(uuid = characteristic::BATTERY_LEVEL_STATUS, read, notify)]
+    pub(crate) level_status: [u8; 3],
+}
+
+pub(crate) struct BleBatteryServer<'stack, 'server, 'conn, P: PacketPool> {
+    pub(crate) battery_level: Characteristic<u8>,
+    pub(crate) battery_level_status: Characteristic<[u8; 3]>,
+    pub(crate) conn: &'conn GattConnection<'stack, 'server, P>,
+}
+
+impl<'stack, 'server, 'conn, P: PacketPool> BleBatteryServer<'stack, 'server, 'conn, P> {
+    pub(crate) fn new(server: &Server, conn: &'conn GattConnection<'stack, 'server, P>) -> Self {
+        Self {
+            battery_level: server.battery_service.level,
+            battery_level_status: server.battery_service.level_status,
+            conn,
         }
-    }"#;
+    }
+}
 
-    let new_body = r#"    pub(crate) async fn run(&mut self) {
-        // Wait 2 seconds, ensure that gatt server has been started
+impl<P: PacketPool> BleBatteryServer<'_, '_, '_, P> {
+    pub(crate) async fn run(&mut self) {
+        // Wait 2 seconds, ensure that gatt server has been started.
         Timer::after_secs(2).await;
 
-        // kobu patch (diagnostic sentinel 73): if try_take pulls a real
-        // value, send it; otherwise send 73 as a distinguishable sentinel.
-        // Some hosts (notably macOS) treat BAS level == 0 as "no data" and
-        // refuse to update the menu off the previously shown value, so we
-        // also clamp anything below 1 to 1 so the user can tell when ADC
-        // genuinely reads zero.
+        // Sentinel 73% on connect: macOS suppresses BAS readings of 0% so a
+        // fresh GATT cache that has never been populated stays blank. By
+        // pushing a non-zero distinguishable value immediately we coax the
+        // menu into showing *something*; the heartbeat below overwrites it
+        // with the real level as soon as BatteryProcessor has it.
         let mut last_level: u8 = 73;
         if let Some(BatteryState::Normal(level)) = BATTERY_UPDATE.try_take() {
             last_level = level.max(1);
@@ -235,9 +273,20 @@ fn patch_rmk_battery_service() {
             error!("Failed to notify battery level (kobu initial): {:?}", e);
         }
 
+        // Initial Battery Level Status push — same idea: get a real value into
+        // the cached characteristic before macOS reads it.
+        let mut last_charging = kobu_vbus_present();
+        let status_bytes = kobu_encode_level_status(last_charging);
+        if let Err(e) = self.battery_level_status.notify(self.conn, &status_bytes).await {
+            error!("Failed to notify level status (kobu initial): {:?}", e);
+        }
+
         loop {
+            // Wake every 10 s (or sooner if BATTERY_UPDATE fires) so VBUS
+            // plug/unplug shows up in the Bluetooth menu within ~10 s and the
+            // host's cached characteristic value never drifts stale.
             let next = embassy_time::with_timeout(
-                embassy_time::Duration::from_secs(60),
+                embassy_time::Duration::from_secs(10),
                 BATTERY_UPDATE.wait(),
             )
             .await;
@@ -247,23 +296,54 @@ fn patch_rmk_battery_service() {
             if let Err(e) = self.battery_level.notify(self.conn, &last_level).await {
                 error!("Failed to notify battery level: {:?}", e);
             }
+
+            let charging_now = kobu_vbus_present();
+            last_charging = charging_now;
+            let status_bytes = kobu_encode_level_status(last_charging);
+            if let Err(e) = self.battery_level_status.notify(self.conn, &status_bytes).await {
+                error!("Failed to notify level status: {:?}", e);
+            }
         }
-    }"#;
-
-    if !contents.contains(old_body) {
-        panic!(
-            "kobu: expected rmk-{RMK_VERSION} BleBatteryServer::run body missing in {}; \
-             upstream may have changed — update firmware/build.rs",
-            path.display()
-        );
     }
-    contents = contents.replace(old_body, new_body);
+}
 
-    contents.push('\n');
-    contents.push_str(MARKER);
-    contents.push('\n');
+/// True when the nRF52840's POWER peripheral reports VBUS present. Mirrors
+/// `crate::status_led::vbus_present` in the kobu firmware so the BAS notify
+/// loop can stay self-contained (no extra signal plumbing).
+#[cfg(feature = "_nrf_ble")]
+fn kobu_vbus_present() -> bool {
+    embassy_nrf::pac::POWER.usbregstatus().read().vbusdetect()
+}
 
-    fs::write(&path, contents).unwrap_or_else(|e| {
+#[cfg(not(feature = "_nrf_ble"))]
+fn kobu_vbus_present() -> bool {
+    false
+}
+
+/// Encode the BAS 1.1 Battery Level Status payload. See the doc comment on
+/// `BatteryService::level_status` for the bit layout.
+fn kobu_encode_level_status(charging: bool) -> [u8; 3] {
+    // Battery is always present on kobu (bit 0 = 1).
+    let mut power_state: u16 = 0b0000_0001;
+    if charging {
+        // bits 1..2 = 01 (wired external power present).
+        power_state |= 0b0000_0010;
+        // bits 5..6 = 01 (charging).
+        power_state |= 0b0010_0000;
+    } else {
+        // bits 5..6 = 10 (discharging-active).
+        power_state |= 0b0100_0000;
+    }
+    [0x00, (power_state & 0xff) as u8, ((power_state >> 8) & 0xff) as u8]
+}
+
+"##;
+
+    let mut out = String::from(new_contents);
+    out.push_str(MARKER);
+    out.push('\n');
+
+    fs::write(&path, out).unwrap_or_else(|e| {
         panic!("kobu: failed to write {}: {e}", path.display());
     });
 }
