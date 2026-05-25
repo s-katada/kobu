@@ -221,14 +221,24 @@ enabled = true
 # at the edge of the room; RMK's advertise path also requests +8 dBm.
 default_tx_power = 8
 # Battery sensing via XIAO nRF52840 BLE's internal voltage divider:
-#   BAT+ pad → on-module 1M/1M divider → P0_31 (AIN7_BAT). Reading P0_31
-#   requires the divider path to be ENABLED, which is gated by P0_14 LOW
-#   (HIGH disables the path AND exposes P0_31 to up to 3.6V, risking
-#   damage). P0_14 is driven LOW by a persisted `[[split.*.output]]`
-#   declaration below for each half. Divider ratio = 1/2 (measured/total).
+#   BAT+ pad → R10 (1 MΩ) → P0_31 (AIN7_BAT) → R11 (510 kΩ) → P0_14.
+#   Reading P0_31 requires the divider path to be ENABLED, which is gated
+#   by P0_14 LOW (HIGH disables the path AND exposes P0_31 to up to 3.6V,
+#   risking damage). P0_14 is driven LOW by a persisted
+#   `[[split.*.output]]` declaration below for each half.
+#
+# Divider ratio is **R11 / (R10 + R11) = 510 / 1510 ≈ 0.338**, not 1/2 —
+# Seeed populates the XIAO BLE module with asymmetric resistors so the
+# nominal LiPo range 3.0–4.2 V lands within the SAADC's 0–3.6 V window
+# without the extra headroom 1M/1M would consume. Earlier kobu builds set
+# measured=1, total=2 (= 0.5) which underreads the actual battery voltage
+# by ~30 %: a fresh 4.0 V LiPo decodes as ~2.7 V, which the RMK formula
+# clamps to 0 % and lights the central LED red even on a healthy charge.
+# The values below match the XIAO BLE schematic measurement and let RMK's
+# get_battery_percent map a 4.0 V LiPo to ~80 %, 4.2 V to 100 %.
 battery_adc_pin = "P0_31"
-adc_divider_measured = 1
-adc_divider_total = 2
+adc_divider_measured = 510
+adc_divider_total = 1510
 
 # XIAO nRF52840 runs from a LiPo. DCDC must be on for stable RF — the generic
 # nrf52840.toml chip default ships with reg0/reg1 disabled, which weakens BLE
