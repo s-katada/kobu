@@ -23,10 +23,12 @@
 //! routes deterministically.
 
 use core::cell::RefCell;
+use core::sync::atomic::{AtomicI32, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
-use embassy_time::Instant;
+use embassy_time::{Instant, Timer};
+use rmk::channel::KEYBOARD_REPORT_CHANNEL;
 use rmk::event::{Axis, Event};
 use rmk::hid::Report;
 use rmk::input_device::{InputDevice, InputProcessor, ProcessResult};
@@ -41,6 +43,125 @@ use crate::config;
 /// a short hold window, so the user sees the central LED light up while
 /// the right-hand trackball is being moved.
 pub static PERIPHERAL_ACTIVITY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+// ─── Pointer delta accumulator ──────────────────────────────────────
+//
+// Why this exists (the "fully-wireless trackball feels のっぺり" bug):
+//
+// The peripheral PMW3610 is polled at 2 kHz and emits one Joystick event
+// per non-zero sample. Every queue on the path to the host
+// (rmk `run_devices!`, `PeripheralManager::run`, EVENT_CHANNEL_SIZE = 16)
+// overflows with a **drop-oldest** policy — i.e. it discards motion
+// rather than summing it. Over USB the host drains HID reports at ~1 kHz
+// so the queues never back up and nothing is dropped. Fully wireless,
+// the central→host BLE HID link only drains at the connection interval
+// (~66–133 Hz, and lower while the single nRF radio also services the
+// split link), so the report queue backs up, `PointerProcessor` would
+// block on `send_report().await`, EVENT_CHANNEL fills, and a large
+// fraction of the trackball's travel is silently dropped → the cursor
+// under-travels and fast motion smears ("のっぺり").
+//
+// Fix: `PointerProcessor::process` no longer sends inline. It *sums*
+// each sample into these accumulators and returns immediately, so
+// EVENT_CHANNEL always drains and never drops. `run_pointer_flush`
+// emits the accumulated delta at whatever rate the host link can
+// actually accept — motion is now coalesced (summed), never discarded.
+static POINTER_ACCUM_X: AtomicI32 = AtomicI32::new(0);
+static POINTER_ACCUM_Y: AtomicI32 = AtomicI32::new(0);
+
+/// Wakes [`run_pointer_flush`] when fresh pointer delta has been
+/// accumulated. Latching `Signal` — a wake raised while the flush task
+/// is busy is remembered, so no motion edge is missed.
+static POINTER_PENDING: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Multiplier base for `config::trackball_cpi()`: 1000 = 1.0×.
+const CPI_DENOM: i32 = 1000;
+
+/// Ceiling on "owed" (accumulated-but-unsent) travel, in milli-counts.
+///
+/// This is the single most important number for the fast-roll feel. A
+/// fast ball spin produces motion far beyond what the BLE HID link can
+/// carry (≈66–133 reports/s × ±127 counts). The earlier design tried to
+/// preserve *all* of it by splitting into many ±127 reports and queuing
+/// them — which buried the cursor under a multi-hundred-ms backlog that
+/// kept gliding after the ball stopped ("超もっさり"). Instead we cap the
+/// owed travel at ~2 reports' worth and drop the rest: the cursor stays
+/// glued to the ball (≤~2 BLE intervals of catch-up, ~15–30 ms) and
+/// macOS pointer acceleration turns the resulting saturated 127-count
+/// reports into a genuinely fast cursor — fast *and* responsive.
+const MAX_PENDING_MILLI: i32 = 254 * CPI_DENOM;
+
+/// Re-try / re-sample cadence while draining (≈250 Hz). Comfortably
+/// above any host BLE interval, so the channel's drain rate — not this
+/// timer — sets the real report rate.
+const FLUSH_TICK_MS: u64 = 4;
+
+/// Drain the pointer accumulator to the host HID report channel.
+///
+/// Spawned alongside the processor chain on the central (see
+/// `src/central.rs`). Coalesces the 2 kHz PMW3610 stream into one HID
+/// report per host BLE interval, applying the live CPI multiplier from
+/// `config::trackball_cpi()` (tunable from kobu-config, Via Custom
+/// Channel 0xC0 id 0x01).
+///
+/// The emission is **non-blocking** (`try_send`) with a **bounded
+/// backlog**: if the report channel is full (host link behind), the
+/// unsent delta stays in `pend_*` and merges with new motion next tick
+/// instead of queuing more reports. `pend_*` is clamped to
+/// `MAX_PENDING_MILLI`, so motion that outruns the link is dropped
+/// rather than turned into a lag tail. This keeps the cursor responsive
+/// at any ball speed.
+pub async fn run_pointer_flush() {
+    // Owed travel in milli-counts (1000 = 1 HID count). Carrying it
+    // across ticks both preserves sub-count precision for a fractional
+    // CPI multiplier and lets a momentarily-full channel coalesce.
+    let mut pend_x: i32 = 0;
+    let mut pend_y: i32 = 0;
+    loop {
+        POINTER_PENDING.wait().await;
+        // Drain until nothing is owed, then sleep on the next motion.
+        loop {
+            let mult = config::trackball_cpi() as i32;
+            pend_x += POINTER_ACCUM_X.swap(0, Ordering::Relaxed) * mult;
+            pend_y += POINTER_ACCUM_Y.swap(0, Ordering::Relaxed) * mult;
+            // Drop travel beyond the backlog ceiling — no lag tail.
+            pend_x = pend_x.clamp(-MAX_PENDING_MILLI, MAX_PENDING_MILLI);
+            pend_y = pend_y.clamp(-MAX_PENDING_MILLI, MAX_PENDING_MILLI);
+
+            let dx = (pend_x / CPI_DENOM).clamp(-127, 127);
+            let dy = (pend_y / CPI_DENOM).clamp(-127, 127);
+            if dx == 0 && dy == 0 {
+                break;
+            }
+            let report = MouseReport {
+                buttons: 0,
+                x: dx as i8,
+                y: dy as i8,
+                wheel: 0,
+                pan: 0,
+            };
+            // Only feed the shared report channel when it has nearly
+            // drained (≤1 queued). `try_send` alone isn't enough: it
+            // succeeds until the 16-deep channel is *full*, which over a
+            // slow BLE link is ~120 ms of buffered pointer reports — the
+            // exact backlog that made fast rolls glide ("もっさり"). Gating
+            // on `len()` keeps at most ~2 reports in flight (~1–2 BLE
+            // intervals), so the cursor tracks the ball in real time and
+            // any motion the link can't take coalesces into pend_*.
+            if KEYBOARD_REPORT_CHANNEL.len() <= 1
+                && KEYBOARD_REPORT_CHANNEL
+                    .try_send(Report::MouseReport(report))
+                    .is_ok()
+            {
+                // Only consume what actually went out; an over-full
+                // channel leaves pend_* intact to coalesce next tick.
+                pend_x -= dx * CPI_DENOM;
+                pend_y -= dy * CPI_DENOM;
+            }
+            Timer::after_millis(FLUSH_TICK_MS).await;
+        }
+    }
+}
 
 /// Wraps an inner `InputDevice` and rewrites `Event::Joystick` axes
 /// X → H, Y → V. Used on the central side to tag locally-sourced
@@ -223,17 +344,17 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                 if !matched {
                     return ProcessResult::Continue(event);
                 }
-                // Negate Y so finger-up moves the cursor up. The
-                // right-half PMW3610 is mirrored relative to the
-                // left-half mount, which leaves Y inverted by default.
-                let report = MouseReport {
-                    buttons: 0,
-                    x: clamp_i8(x),
-                    y: clamp_i8(-y),
-                    wheel: 0,
-                    pan: 0,
-                };
-                self.send_report(Report::MouseReport(report)).await;
+                // Sum into the accumulator instead of emitting a report
+                // inline. Returning immediately (no `send_report().await`)
+                // keeps EVENT_CHANNEL draining so the central never hits
+                // the drop-oldest path that loses motion when the host
+                // BLE link is slow. `run_pointer_flush` turns the sum
+                // into HID reports at the host's pace. Negate Y so
+                // finger-up moves the cursor up (the right-half PMW3610
+                // is mounted mirrored, leaving Y inverted by default).
+                POINTER_ACCUM_X.fetch_add(x as i32, Ordering::Relaxed);
+                POINTER_ACCUM_Y.fetch_add(-(y as i32), Ordering::Relaxed);
+                POINTER_PENDING.signal(());
                 // Wake the status-LED controller so it can flash purple
                 // for the configured hold window. `Signal::signal` overwrites
                 // any pending value, which is fine — we only need the

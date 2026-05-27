@@ -12,6 +12,12 @@ fn main() {
     patch_rmk_ble_for_macos();
     patch_rmk_battery_service();
     patch_rmk_battery_processor_signal();
+    patch_rmk_battery_kobu_atomics();
+    patch_rmk_kobu_settings_atomics();
+    patch_rmk_via_custom_get_kobu();
+    patch_rmk_via_custom_set_kobu_settings();
+    patch_rmk_via_custom_save_kobu();
+    patch_rmk_peripheral_bootloader_jump();
     patch_rmk_macro_adc_acquisition_time();
 
     generate_vial_config();
@@ -501,4 +507,602 @@ fn patch_rmk_battery_processor_signal() {
     fs::write(&path, contents).unwrap_or_else(|e| {
         panic!("kobu: failed to write {}: {e}", path.display());
     });
+}
+
+/// Inject two `pub static AtomicU8` slots into rmk-0.8.2's `battery.rs` —
+/// `KOBU_CENTRAL_BATTERY_PERCENT` and `KOBU_PERIPHERAL_BATTERY_PERCENT`.
+/// The kobu firmware writes each side's decoded LiPo percentage into the
+/// corresponding atomic from its bit-tag routing tap (see
+/// `firmware/src/battery_source.rs`), and the patched `via/mod.rs`
+/// `CustomGetValue` handler reads them back to answer Via Custom Channel
+/// 0xC0 queries from `kobu-config`.
+///
+/// Atomics live inside rmk's crate because the `via/mod.rs` handler
+/// (which we also patch) can only reach symbols visible from inside the
+/// rmk crate. Marking them `pub` lets the kobu firmware crate write to
+/// them via `rmk::input_device::battery::KOBU_*`.
+fn patch_rmk_battery_kobu_atomics() {
+    const MARKER: &str = "// kobu: battery atomics for via custom get applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/input_device/battery.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} input_device/battery.rs; \
+             kobu atomics patch was not applied"
+        );
+        return;
+    };
+
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let anchor = "pub(crate) static BATTERY_UPDATE: Signal<crate::RawMutex, BatteryState> = Signal::new();";
+    if !contents.contains(anchor) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} input_device/battery.rs anchor missing in {}; \
+             upstream may have changed — update firmware/build.rs",
+            path.display()
+        );
+    }
+    let injected = "pub(crate) static BATTERY_UPDATE: Signal<crate::RawMutex, BatteryState> = Signal::new();\n\n// kobu: pub atomics for the Via Custom Get handler. Each side's LiPo\n// percentage (0..=100) is mirrored here from the kobu-side bit-tag tap\n// in firmware/src/battery_source.rs, so the patched via/mod.rs handler\n// can answer kobu-config's CustomGetValue(channel=0xC0, id=0x10/0x11)\n// queries without reaching across crates.\npub static KOBU_CENTRAL_BATTERY_PERCENT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);\npub static KOBU_PERIPHERAL_BATTERY_PERCENT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);";
+    contents = contents.replace(anchor, injected);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Wire the RMK 0.8 `ViaCommand::CustomGetValue` stub up so the kobu-config
+/// web UI's `Via Custom Channel 0xC0` queries return the current LiPo
+/// percentage on each kobu half.
+///
+/// Upstream RMK leaves CustomGet/Set/Save as `warn!()`-only stubs (issue
+/// #39 in kobu's tracker). We replace the get-side stub with a kobu-aware
+/// branch: when channel == 0xC0, the handler reads the matching atomic
+/// (id 0x10 = central, id 0x11 = peripheral) out of
+/// `crate::input_device::battery::KOBU_*` and writes the percent into the
+/// response buffer at index 3 (the standard Via custom-value reply layout).
+///
+/// Set / Save are left as warnings — kobu's battery values are read-only.
+fn patch_rmk_via_custom_get_kobu() {
+    // v2 marker covers the extended id table (battery + writable settings).
+    // Earlier kobu builds shipped v1 (battery-only); we leave the legacy
+    // marker in place when found so the patch stays idempotent across
+    // both fresh and previously-patched rmk caches.
+    const MARKER_V2: &str = "// kobu: via CustomGetValue handler for channel 0xC0 (v2 settings) applied";
+    const MARKER_V1: &str = "// kobu: via CustomGetValue handler for channel 0xC0 applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/host/via/mod.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} host/via/mod.rs; \
+             via CustomGet patch was not applied"
+        );
+        return;
+    };
+
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+
+    if contents.contains(MARKER_V2) {
+        return;
+    }
+
+    // The block we're replacing depends on whether v1 already patched
+    // this file. Cargo's registry cache survives across builds, so when a
+    // user has previously built a kobu firmware the v1 block is present
+    // instead of the original `warn!()`-only stub. Detect both states.
+    let original_block = r#"            ViaCommand::CustomGetValue => {
+                // backlight/rgblight/rgb matrix/led matrix/audio settings here
+                warn!("Custom get value -- not supported")
+            }"#;
+    let v1_block = r#"            ViaCommand::CustomGetValue => {
+                // kobu Via Custom Channel 0xC0 — see firmware/src/config.rs and
+                // web/src/protocol/customValue.ts for the id table. All kobu
+                // ids are read-only from the host's perspective; the Set /
+                // Save handlers still warn-and-drop.
+                let channel = report.output_data[1];
+                let id = report.output_data[2];
+                if channel == 0xC0 {
+                    match id {
+                        0x10 => {
+                            report.input_data[3] = crate::input_device::battery::KOBU_CENTRAL_BATTERY_PERCENT
+                                .load(core::sync::atomic::Ordering::Relaxed);
+                        }
+                        0x11 => {
+                            report.input_data[3] = crate::input_device::battery::KOBU_PERIPHERAL_BATTERY_PERCENT
+                                .load(core::sync::atomic::Ordering::Relaxed);
+                        }
+                        _ => {
+                            warn!("kobu: unknown CustomGetValue id 0x{:02X} on channel 0xC0", id);
+                        }
+                    }
+                } else {
+                    warn!("Custom get value -- not supported");
+                }
+            }"#;
+
+    let new_block = r#"            ViaCommand::CustomGetValue => {
+                // kobu Via Custom Channel 0xC0 — see firmware/src/config.rs and
+                // web/src/protocol/customValue.ts for the id table.
+                // - 0x01..0x07: read/write runtime settings backed by atomics
+                //   in crate::input_device::battery (KOBU_*); the Set arm
+                //   updates the same atomics so reads see live state.
+                // - 0x10/0x11:  read-only battery percentages mirrored from
+                //   kobu's source tap.
+                let channel = report.output_data[1];
+                let id = report.output_data[2];
+                if channel == 0xC0 {
+                    use core::sync::atomic::Ordering;
+                    let kc = &crate::input_device::battery::KOBU_CENTRAL_BATTERY_PERCENT;
+                    let kp = &crate::input_device::battery::KOBU_PERIPHERAL_BATTERY_PERCENT;
+                    match id {
+                        0x01 => {
+                            // u16 BE at bytes 3..5
+                            let v = crate::input_device::battery::KOBU_TRACKBALL_CPI.load(Ordering::Relaxed);
+                            report.input_data[3] = (v >> 8) as u8;
+                            report.input_data[4] = (v & 0xFF) as u8;
+                        }
+                        0x02 => {
+                            report.input_data[3] = crate::input_device::battery::KOBU_SCROLL_THROTTLE_MS.load(Ordering::Relaxed);
+                        }
+                        0x03 => {
+                            report.input_data[3] = if crate::input_device::battery::KOBU_SCROLL_INVERT_X.load(Ordering::Relaxed) { 1 } else { 0 };
+                        }
+                        0x04 => {
+                            report.input_data[3] = if crate::input_device::battery::KOBU_SCROLL_INVERT_Y.load(Ordering::Relaxed) { 1 } else { 0 };
+                        }
+                        0x05 => {
+                            let v = crate::input_device::battery::KOBU_STATUS_LED_PURPLE_HOLD_MS.load(Ordering::Relaxed);
+                            report.input_data[3] = (v >> 8) as u8;
+                            report.input_data[4] = (v & 0xFF) as u8;
+                        }
+                        0x06 => {
+                            report.input_data[3] = crate::input_device::battery::KOBU_STATUS_LED_BAT_HIGH.load(Ordering::Relaxed);
+                        }
+                        0x07 => {
+                            report.input_data[3] = crate::input_device::battery::KOBU_STATUS_LED_BAT_LOW.load(Ordering::Relaxed);
+                        }
+                        0x10 => {
+                            report.input_data[3] = kc.load(Ordering::Relaxed);
+                        }
+                        0x11 => {
+                            report.input_data[3] = kp.load(Ordering::Relaxed);
+                        }
+                        _ => {
+                            warn!("kobu: unknown CustomGetValue id 0x{:02X} on channel 0xC0", id);
+                        }
+                    }
+                } else {
+                    warn!("Custom get value -- not supported");
+                }
+            }"#;
+
+    let target = if contents.contains(v1_block) {
+        v1_block
+    } else if contents.contains(original_block) {
+        original_block
+    } else {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} host/via/mod.rs CustomGetValue block missing in {} (neither original nor kobu-v1 shape found); \
+             upstream may have changed — update firmware/build.rs",
+            path.display()
+        );
+    };
+    contents = contents.replace(target, new_block);
+
+    // Strip stale v1 marker, append v2.
+    if contents.contains(MARKER_V1) {
+        contents = contents.replace(&format!("\n{}\n", MARKER_V1), "\n");
+    }
+    contents.push('\n');
+    contents.push_str(MARKER_V2);
+    contents.push('\n');
+
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Extend the `ViaCommand::CustomSetValue` arm so writes for kobu
+/// channel `0xC0`, ids `0x01..=0x07` mutate the runtime config atomics
+/// in `crate::input_device::battery::KOBU_*`. The existing
+/// peripheral-bootloader-jump branch (channel 0xC0 / id 0x12) is
+/// preserved verbatim; only the trailing `else` warn branch is replaced.
+fn patch_rmk_via_custom_set_kobu_settings() {
+    const MARKER: &str = "// kobu: via CustomSetValue handler for channel 0xC0 settings applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/host/via/mod.rs") else {
+        return;
+    };
+
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    // Anchor reflects the bootloader-jump-patched Set arm (see
+    // `patch_rmk_peripheral_bootloader_jump`). That patch always runs
+    // before this one so the anchor below is what's in the file at
+    // build time.
+    let bootloader_patched_block = r#"            ViaCommand::CustomSetValue => {
+                // kobu Via Custom Channel 0xC0 — write-only kobu commands
+                // (currently just 0x12 = peripheral bootloader jump).
+                let channel = report.output_data[1];
+                let id = report.output_data[2];
+                let value = report.output_data[3];
+                #[cfg(all(feature = "_ble", feature = "split", feature = "controller"))]
+                if channel == 0xC0 && id == 0x12 && value == 1 {
+                    warn!("kobu: publishing PeripheralBootloaderJump from Via CustomSetValue");
+                    crate::channel::send_controller_event_new(crate::event::ControllerEvent::PeripheralBootloaderJump);
+                } else {
+                    warn!("Custom set value -- not supported (channel={:02X} id={:02X})", channel, id);
+                }
+                #[cfg(not(all(feature = "_ble", feature = "split", feature = "controller")))]
+                warn!("Custom set value -- not supported (channel={:02X} id={:02X})", channel, id);
+            }"#;
+
+    let new_block = r#"            ViaCommand::CustomSetValue => {
+                // kobu Via Custom Channel 0xC0.
+                //   0x01..=0x07: runtime settings — write into the matching
+                //                atomic in crate::input_device::battery.
+                //                Clamping mirrors firmware/src/config.rs.
+                //   0x12:        peripheral bootloader-jump relay (BLE).
+                let channel = report.output_data[1];
+                let id = report.output_data[2];
+                let value = report.output_data[3];
+                let value2 = report.output_data[4];
+                if channel == 0xC0 {
+                    use core::sync::atomic::Ordering;
+                    match id {
+                        0x01 => {
+                            // u16 BE, clamp 200..=3200 — matches
+                            // firmware/src/config.rs::apply.
+                            let raw = ((value as u16) << 8) | (value2 as u16);
+                            let clamped = if raw < 200 { 200 } else if raw > 3200 { 3200 } else { raw };
+                            crate::input_device::battery::KOBU_TRACKBALL_CPI.store(clamped, Ordering::Relaxed);
+                        }
+                        0x02 => {
+                            let v = if value > 50 { 50 } else { value };
+                            crate::input_device::battery::KOBU_SCROLL_THROTTLE_MS.store(v, Ordering::Relaxed);
+                        }
+                        0x03 => {
+                            crate::input_device::battery::KOBU_SCROLL_INVERT_X.store(value != 0, Ordering::Relaxed);
+                        }
+                        0x04 => {
+                            crate::input_device::battery::KOBU_SCROLL_INVERT_Y.store(value != 0, Ordering::Relaxed);
+                        }
+                        0x05 => {
+                            // u16 BE, clamp 0..=2000.
+                            let raw = ((value as u16) << 8) | (value2 as u16);
+                            let clamped = if raw > 2000 { 2000 } else { raw };
+                            crate::input_device::battery::KOBU_STATUS_LED_PURPLE_HOLD_MS.store(clamped, Ordering::Relaxed);
+                        }
+                        0x06 => {
+                            // High threshold ≥ 20, ≤ 100. Keep low<high invariant.
+                            let mut high = if value < 20 { 20 } else if value > 100 { 100 } else { value };
+                            let mut low = crate::input_device::battery::KOBU_STATUS_LED_BAT_LOW.load(Ordering::Relaxed);
+                            if low >= high { core::mem::swap(&mut low, &mut high); }
+                            crate::input_device::battery::KOBU_STATUS_LED_BAT_HIGH.store(high, Ordering::Relaxed);
+                            crate::input_device::battery::KOBU_STATUS_LED_BAT_LOW.store(low, Ordering::Relaxed);
+                        }
+                        0x07 => {
+                            let mut low = if value > 50 { 50 } else { value };
+                            let mut high = crate::input_device::battery::KOBU_STATUS_LED_BAT_HIGH.load(Ordering::Relaxed);
+                            if low >= high { core::mem::swap(&mut low, &mut high); }
+                            crate::input_device::battery::KOBU_STATUS_LED_BAT_HIGH.store(high, Ordering::Relaxed);
+                            crate::input_device::battery::KOBU_STATUS_LED_BAT_LOW.store(low, Ordering::Relaxed);
+                        }
+                        #[cfg(all(feature = "_ble", feature = "split", feature = "controller"))]
+                        0x12 if value == 1 => {
+                            warn!("kobu: publishing PeripheralBootloaderJump from Via CustomSetValue");
+                            crate::channel::send_controller_event_new(crate::event::ControllerEvent::PeripheralBootloaderJump);
+                        }
+                        _ => {
+                            warn!("kobu: unknown CustomSetValue id 0x{:02X} on channel 0xC0", id);
+                        }
+                    }
+                } else {
+                    warn!("Custom set value -- not supported (channel={:02X} id={:02X})", channel, id);
+                }
+            }"#;
+
+    if !contents.contains(bootloader_patched_block) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} host/via/mod.rs CustomSetValue (bootloader-patched) block missing in {}; \
+             upstream may have changed or peripheral-bootloader-jump patch is out of sync — update firmware/build.rs",
+            path.display()
+        );
+    }
+    contents = contents.replace(bootloader_patched_block, new_block);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Patch `ViaCommand::CustomSave` so saves on kobu channel `0xC0` are a
+/// silent no-op success. Writes to the kobu atomics are applied
+/// immediately by the Set handler — RMK 0.8 has no persistence layer
+/// for our channel, so Save is purely a vial-gui-compat ack.
+fn patch_rmk_via_custom_save_kobu() {
+    const MARKER: &str = "// kobu: via CustomSave handler for channel 0xC0 applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/host/via/mod.rs") else {
+        return;
+    };
+
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let old_block = r#"            ViaCommand::CustomSave => {
+                // backlight/rgblight/rgb matrix/led matrix/audio settings here
+                warn!("Custom get value -- not supported")
+            }"#;
+    let new_block = r#"            ViaCommand::CustomSave => {
+                // kobu Via Custom Channel 0xC0 — silently ack. Atomics
+                // are mutated synchronously by CustomSetValue; vial-gui
+                // -style tooling expects an explicit Save step, so we
+                // succeed without doing anything for our channel.
+                let channel = report.output_data[1];
+                if channel != 0xC0 {
+                    warn!("Custom save -- not supported (channel={:02X})", channel);
+                }
+            }"#;
+
+    if !contents.contains(old_block) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} host/via/mod.rs CustomSave block missing in {}; \
+             upstream may have changed — update firmware/build.rs",
+            path.display()
+        );
+    }
+    contents = contents.replace(old_block, new_block);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Add `pub static` atomics for kobu's writable runtime settings into
+/// `rmk::input_device::battery`. Co-located with the existing battery
+/// atomics so the Via Custom Get/Set handlers can reach them via a
+/// single import path. Mirrors the schema in
+/// `firmware/src/config.rs::KobuSettings`.
+fn patch_rmk_kobu_settings_atomics() {
+    const MARKER: &str = "// kobu: writable runtime settings atomics applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/input_device/battery.rs") else {
+        return;
+    };
+
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    // Anchor: the last line of the battery-percent injection from
+    // `patch_rmk_battery_kobu_atomics`. That patch runs before this
+    // one, so the anchor is always in the file at this point.
+    let anchor = "pub static KOBU_PERIPHERAL_BATTERY_PERCENT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);";
+    if !contents.contains(anchor) {
+        panic!(
+            "kobu: expected battery-percent anchor in rmk-{RMK_VERSION} input_device/battery.rs at {}; \
+             patch_rmk_battery_kobu_atomics must run first — order in build.rs::main",
+            path.display()
+        );
+    }
+
+    let injected = "pub static KOBU_PERIPHERAL_BATTERY_PERCENT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);\n\n// kobu: writable runtime settings. Mirrors firmware/src/config.rs schema.\n// The Via Custom Set handler in host/via/mod.rs writes here on a host\n// SetValue; firmware/src/{trackball,status_led}.rs read via thin\n// helpers in firmware/src/config.rs. Default values must match\n// `KobuSettings::default()` so a fresh build behaves identically.\npub static KOBU_TRACKBALL_CPI: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(1000);\npub static KOBU_SCROLL_THROTTLE_MS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);\npub static KOBU_SCROLL_INVERT_X: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);\npub static KOBU_SCROLL_INVERT_Y: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);\npub static KOBU_STATUS_LED_PURPLE_HOLD_MS: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(200);\npub static KOBU_STATUS_LED_BAT_HIGH: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(60);\npub static KOBU_STATUS_LED_BAT_LOW: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(20);";
+    contents = contents.replace(anchor, injected);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Wire a split-link bootloader-jump relay so kobu-config can flash the
+/// peripheral without the user double-tapping its physical RESET button.
+/// Path: web UI → Vial `CustomSetValue(channel=0xC0, id=0x12, value=1)` →
+/// central publishes `ControllerEvent::PeripheralBootloaderJump` →
+/// `PeripheralManager::run` writes `SplitMessage::PeripheralBootloaderJump`
+/// to the peripheral over the BLE split link → peripheral's
+/// `SplitPeripheral::run` calls `crate::boot::jump_to_bootloader()` and
+/// the device reboots into UF2 mode.
+///
+/// This is the deferred "split-bootloader-relay" follow-up tracked in
+/// kobu's memory (`project-kobu-rmk`). It touches five upstream rmk
+/// files; each `replacements` entry has its own panic-on-drift sentinel.
+fn patch_rmk_peripheral_bootloader_jump() {
+    const MARKER: &str = "// kobu: peripheral bootloader jump relay applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let mut applied_any = false;
+
+    // ── event.rs: add ControllerEvent::PeripheralBootloaderJump ───────
+    if let Some(path) = find_rmk_file(RMK_VERSION, "src/event.rs") {
+        let contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("kobu: failed to read {}: {e}", path.display());
+        });
+        if !contents.contains(MARKER) {
+            println!("cargo:rerun-if-changed={}", path.display());
+            let from = "    #[cfg(all(feature = \"_ble\", feature = \"split\"))]\n    ClearPeer,";
+            let to = "    #[cfg(all(feature = \"_ble\", feature = \"split\"))]\n    ClearPeer,\n    /// kobu: trigger peripheral to reboot into UF2 bootloader, central → peripheral via split link\n    #[cfg(all(feature = \"_ble\", feature = \"split\"))]\n    PeripheralBootloaderJump,";
+            if !contents.contains(from) {
+                panic!(
+                    "kobu: expected rmk-{RMK_VERSION} event.rs ClearPeer anchor missing in {}; \
+                     upstream may have changed — update firmware/build.rs",
+                    path.display()
+                );
+            }
+            let mut new_contents = contents.replace(from, to);
+            new_contents.push('\n');
+            new_contents.push_str(MARKER);
+            new_contents.push('\n');
+            fs::write(&path, new_contents).unwrap_or_else(|e| {
+                panic!("kobu: failed to write {}: {e}", path.display());
+            });
+            applied_any = true;
+        }
+    }
+
+    // ── split/mod.rs: add SplitMessage::PeripheralBootloaderJump ──────
+    if let Some(path) = find_rmk_file(RMK_VERSION, "src/split/mod.rs") {
+        let contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("kobu: failed to read {}: {e}", path.display());
+        });
+        if !contents.contains(MARKER) {
+            println!("cargo:rerun-if-changed={}", path.display());
+            let from = "    /// Layer number from central to peripheral\n    Layer(u8),\n}";
+            let to = "    /// Layer number from central to peripheral\n    Layer(u8),\n    /// kobu: tell peripheral to reboot into UF2 bootloader (central → peripheral)\n    PeripheralBootloaderJump,\n}";
+            if !contents.contains(from) {
+                panic!(
+                    "kobu: expected rmk-{RMK_VERSION} split/mod.rs Layer anchor missing in {}; \
+                     upstream may have changed — update firmware/build.rs",
+                    path.display()
+                );
+            }
+            let mut new_contents = contents.replace(from, to);
+            new_contents.push('\n');
+            new_contents.push_str(MARKER);
+            new_contents.push('\n');
+            fs::write(&path, new_contents).unwrap_or_else(|e| {
+                panic!("kobu: failed to write {}: {e}", path.display());
+            });
+            applied_any = true;
+        }
+    }
+
+    // ── split/driver.rs: PeripheralManager handles the controller event ─
+    if let Some(path) = find_rmk_file(RMK_VERSION, "src/split/driver.rs") {
+        let contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("kobu: failed to read {}: {e}", path.display());
+        });
+        if !contents.contains(MARKER) {
+            println!("cargo:rerun-if-changed={}", path.display());
+            let from = "                        ControllerEvent::Layer(layer) => {";
+            let to = "                        #[cfg(all(feature = \"_ble\", feature = \"split\"))]\n                        ControllerEvent::PeripheralBootloaderJump => {\n                            debug!(\"kobu: relaying PeripheralBootloaderJump to peripheral {}\", self.id);\n                            if let Err(e) = self.transceiver.write(&SplitMessage::PeripheralBootloaderJump).await {\n                                match e {\n                                    SplitDriverError::Disconnected => return,\n                                    _ => error!(\"SplitDriver write error: {:?}\", e),\n                                }\n                            }\n                        }\n                        ControllerEvent::Layer(layer) => {";
+            if !contents.contains(from) {
+                panic!(
+                    "kobu: expected rmk-{RMK_VERSION} split/driver.rs ControllerEvent::Layer anchor missing in {}; \
+                     upstream may have changed — update firmware/build.rs",
+                    path.display()
+                );
+            }
+            let mut new_contents = contents.replace(from, to);
+            new_contents.push('\n');
+            new_contents.push_str(MARKER);
+            new_contents.push('\n');
+            fs::write(&path, new_contents).unwrap_or_else(|e| {
+                panic!("kobu: failed to write {}: {e}", path.display());
+            });
+            applied_any = true;
+        }
+    }
+
+    // ── split/peripheral.rs: peripheral side handles the split message ─
+    if let Some(path) = find_rmk_file(RMK_VERSION, "src/split/peripheral.rs") {
+        let contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("kobu: failed to read {}: {e}", path.display());
+        });
+        if !contents.contains(MARKER) {
+            println!("cargo:rerun-if-changed={}", path.display());
+            let from = "                        SplitMessage::Layer(layer) => {";
+            let to = "                        SplitMessage::PeripheralBootloaderJump => {\n                            info!(\"kobu: received bootloader-jump from central, rebooting into UF2 mode\");\n                            crate::boot::jump_to_bootloader();\n                        }\n                        SplitMessage::Layer(layer) => {";
+            if !contents.contains(from) {
+                panic!(
+                    "kobu: expected rmk-{RMK_VERSION} split/peripheral.rs SplitMessage::Layer anchor missing in {}; \
+                     upstream may have changed — update firmware/build.rs",
+                    path.display()
+                );
+            }
+            let mut new_contents = contents.replace(from, to);
+            new_contents.push('\n');
+            new_contents.push_str(MARKER);
+            new_contents.push('\n');
+            fs::write(&path, new_contents).unwrap_or_else(|e| {
+                panic!("kobu: failed to write {}: {e}", path.display());
+            });
+            applied_any = true;
+        }
+    }
+
+    // ── via/mod.rs: CustomSetValue handler for channel 0xC0 id 0x12 ───
+    if let Some(path) = find_rmk_file(RMK_VERSION, "src/host/via/mod.rs") {
+        let contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("kobu: failed to read {}: {e}", path.display());
+        });
+        if !contents.contains(MARKER) {
+            println!("cargo:rerun-if-changed={}", path.display());
+            let from = "            ViaCommand::CustomSetValue => {\n                // backlight/rgblight/rgb matrix/led matrix/audio settings here\n                warn!(\"Custom set value -- not supported\")\n            }";
+            let to = "            ViaCommand::CustomSetValue => {\n                // kobu Via Custom Channel 0xC0 — write-only kobu commands\n                // (currently just 0x12 = peripheral bootloader jump).\n                let channel = report.output_data[1];\n                let id = report.output_data[2];\n                let value = report.output_data[3];\n                #[cfg(all(feature = \"_ble\", feature = \"split\", feature = \"controller\"))]\n                if channel == 0xC0 && id == 0x12 && value == 1 {\n                    warn!(\"kobu: publishing PeripheralBootloaderJump from Via CustomSetValue\");\n                    crate::channel::send_controller_event_new(crate::event::ControllerEvent::PeripheralBootloaderJump);\n                } else {\n                    warn!(\"Custom set value -- not supported (channel={:02X} id={:02X})\", channel, id);\n                }\n                #[cfg(not(all(feature = \"_ble\", feature = \"split\", feature = \"controller\")))]\n                warn!(\"Custom set value -- not supported (channel={:02X} id={:02X})\", channel, id);\n            }";
+            if !contents.contains(from) {
+                panic!(
+                    "kobu: expected rmk-{RMK_VERSION} host/via/mod.rs CustomSetValue stub missing in {}; \
+                     upstream may have changed — update firmware/build.rs",
+                    path.display()
+                );
+            }
+            let mut new_contents = contents.replace(from, to);
+            new_contents.push('\n');
+            new_contents.push_str(MARKER);
+            new_contents.push('\n');
+            fs::write(&path, new_contents).unwrap_or_else(|e| {
+                panic!("kobu: failed to write {}: {e}", path.display());
+            });
+            applied_any = true;
+        }
+    }
+
+    if !applied_any {
+        println!(
+            "cargo:warning=kobu: peripheral bootloader jump relay patch — no files modified (already applied or rmk-{RMK_VERSION} not found)"
+        );
+    }
 }
