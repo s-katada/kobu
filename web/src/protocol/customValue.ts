@@ -63,7 +63,9 @@ export interface ValueDef {
     | 'scroll_invert_y'
     | 'status_led_purple_hold_ms'
     | 'status_led_battery_high_threshold'
-    | 'status_led_battery_low_threshold';
+    | 'status_led_battery_low_threshold'
+    | 'central_battery_percent'
+    | 'peripheral_battery_percent';
   type: ValueType;
   /** Closed range `[min, max]`. The UI clamps to this; the firmware
    *  also clamps to its own range as a defence-in-depth check. */
@@ -90,6 +92,13 @@ export const KOBU_VALUES: readonly ValueDef[] = Object.freeze([
     default: 60,
   },
   { id: 0x07, key: 'status_led_battery_low_threshold', type: 'u8', min: 0, max: 50, default: 20 },
+  // Read-only battery status, populated by the kobu firmware's bit-tag
+  // source tap (see `firmware/src/battery_source.rs`) and answered by the
+  // patched RMK `via/mod.rs` `CustomGetValue` handler. `min`/`max`/`default`
+  // are kept open so the parser's "out of range → default" guard doesn't
+  // kick in for a legitimately reported 0 % battery.
+  { id: 0x10, key: 'central_battery_percent', type: 'u8', min: 0, max: 100, default: 0 },
+  { id: 0x11, key: 'peripheral_battery_percent', type: 'u8', min: 0, max: 100, default: 0 },
 ]);
 
 export type KobuSettingKey = (typeof KOBU_VALUES)[number]['key'];

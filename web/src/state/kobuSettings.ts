@@ -10,11 +10,15 @@
  * don't want one round-trip per pixel. The store collects pending
  * writes per-slot and flushes 150 ms after the last edit.
  *
- * ⚠ The firmware-side handler is not yet wired up (see #39's
- * "Deferred" section). Until it lands, writes succeed on the wire
- * (RMK's stub handler ack'd them) but the values are not persisted.
- * The UI surfaces a static "開発中の機能" banner explaining this so
- * users aren't blindsided when a setting doesn't survive a reboot.
+ * Firmware-side wire integration shipped as a build.rs RMK patch
+ * (`patch_rmk_via_custom_*` in `firmware/build.rs`): every CustomSet
+ * lands directly in `crate::input_device::battery::KOBU_*` atomics
+ * which `firmware/src/{trackball,status_led}.rs` read on every event.
+ * Reads round-trip via the same atomics — sliders mirror live state.
+ *
+ * ⚠ Persistence across reboots is still deferred (issue #39). Every
+ * boot reloads `KobuSettings::default()`; the UI surfaces a "live
+ * updates" banner so users aren't blindsided.
  */
 
 import { create } from 'zustand';
@@ -181,4 +185,11 @@ export const STATUS_LED_KEYS: readonly KobuSettingKey[] = [
   'status_led_purple_hold_ms',
   'status_led_battery_high_threshold',
   'status_led_battery_low_threshold',
+];
+/// Read-only display values populated by the firmware's bit-tag battery
+/// source tap. UI components surface these in a dedicated battery panel
+/// rather than mixing them in with the editable settings categories above.
+export const BATTERY_KEYS: readonly KobuSettingKey[] = [
+  'central_battery_percent',
+  'peripheral_battery_percent',
 ];

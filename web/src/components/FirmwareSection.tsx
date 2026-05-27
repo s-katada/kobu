@@ -154,10 +154,15 @@ function AssetPanel({ label, target, asset, resetAsset, fallbackName }: AssetPan
       </div>
     );
   }
+  // Central installs always include the flash-storage clear (clean mode),
+  // so the user doesn't have to choose between "preserve keymap" and
+  // "factory reset + reinstall". The two-stage clean flow is driven
+  // automatically by the single button. Peripheral keeps the preserve
+  // path as the default and the clean path as an opt-in extra button.
+  const isCentral = target === 'central';
   return (
     <div className="space-y-2">
-      <InstallButton label={label} target={target} asset={asset} />
-      {resetAsset && (
+      {isCentral && resetAsset ? (
         <InstallButton
           label={label}
           target={target}
@@ -165,6 +170,19 @@ function AssetPanel({ label, target, asset, resetAsset, fallbackName }: AssetPan
           mode="clean"
           resetAsset={resetAsset}
         />
+      ) : (
+        <>
+          <InstallButton label={label} target={target} asset={asset} />
+          {resetAsset && (
+            <InstallButton
+              label={label}
+              target={target}
+              asset={asset}
+              mode="clean"
+              resetAsset={resetAsset}
+            />
+          )}
+        </>
       )}
       <a
         href={asset.downloadUrl}

@@ -1,21 +1,29 @@
 /**
- * SVG keymap renderer.
+ * Keymap renderer.
  *
- * Reads the firmware-supplied `layouts.keymap` from `vial.json` and
- * paints each cell at its declared row/col, honouring `{x: N}` skips
- * (split gap + phantom slots) by advancing the cursor without
- * emitting a rect.
+ * Renders the firmware-supplied `layouts.keymap` from `vial.json` as a
+ * grid of HTML `<button>` keycaps positioned absolutely within a
+ * matrix-unit-sized container. Each keycap carries:
+ *   - a centred "tap" label (big)
+ *   - an optional small "hold / modifier" badge along the top
+ *   - an optional small bottom hint (alt glyph)
  *
- * Click events flow up via `onCellClick(row, col)` — the picker / save
- * flow live in the parent component, not here. This keeps the SVG
- * stateless and trivially testable in isolation.
+ * The structured label and `accent` tint come from
+ * `protocol/keycodes.ts::labelForKeycode`, so visual treatment stays
+ * consistent across the editor.
+ *
+ * Click events flow up via `onCellClick(row, col)`; the picker / save
+ * flow live in the parent component, so the renderer is stateless and
+ * trivially testable in isolation.
+ *
+ * `buildCells` is exported for unit tests in `KeymapView.test.tsx`.
  */
 
 import { useMemo } from 'react';
 import type { KeyboardLayoutDef } from '../protocol/handshake';
 import { type KeyLabel, labelForKeycode } from '../protocol/keycodes';
 
-const UNIT = 56; // px per matrix unit
+const UNIT = 56;
 const GAP = 4;
 const PADDING = 12;
 
@@ -41,6 +49,8 @@ export interface KeymapViewProps {
   selected: { row: number; col: number } | null;
   isDirty: (row: number, col: number) => boolean;
   onCellClick: (row: number, col: number) => void;
+  /** Optional hover callback — receives the cell or null when leaving. */
+  onCellHover?: (cell: { row: number; col: number } | null) => void;
 }
 
 export function KeymapView({
@@ -49,16 +59,13 @@ export function KeymapView({
   selected,
   isDirty,
   onCellClick,
+  onCellHover,
 }: KeymapViewProps) {
   const midCol = Math.floor(definition.matrix.cols / 2);
   const cells = useMemo(
     () =>
       buildCells(definition.layouts.keymap as ReadonlyArray<ReadonlyArray<LayoutEntry>>, {
         midCol,
-        // Snap cells to their column index so the rendered layout is
-        // immune to off-by-N `{x: N}` mistakes embedded in old
-        // firmware builds of vial.json. The renderer is deterministic
-        // from (row, col) alone.
         snapToCol: true,
       }),
     [definition.layouts.keymap, midCol],
@@ -67,158 +74,164 @@ export function KeymapView({
   const midlineX = useMemo(() => computeMidlineX(cells, midCol), [cells, midCol]);
 
   return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      aria-label="kobu キーマップ"
-      className="w-full h-auto max-h-[60vh] select-none"
-    >
-      <defs>
-        <filter id="keycap-shadow" x="-10%" y="-10%" width="120%" height="130%">
-          <feGaussianBlur in="SourceAlpha" stdDeviation="0.6" />
-          <feOffset dy="1" />
-          <feComposite in2="SourceAlpha" operator="arithmetic" k2="-1" k3="1" />
-          <feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.18 0" />
-          <feMerge>
-            <feMergeNode />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
-      </defs>
-      {midlineX !== null && (
-        <line
-          x1={midlineX}
-          x2={midlineX}
-          y1={PADDING / 2}
-          y2={height - PADDING / 2}
-          stroke="#d4d4d8"
-          strokeDasharray="4 4"
-          strokeWidth={1}
-          aria-hidden
-        />
-      )}
-      {cells.map((cell) => {
-        const value = keymap[cell.row]?.[cell.col] ?? 0;
-        const label = labelForKeycode(value, { definition });
-        const isSelected =
-          selected !== null && selected.row === cell.row && selected.col === cell.col;
-        const dirty = isDirty(cell.row, cell.col);
-        return (
-          <KeyCell
-            key={`${cell.row}-${cell.col}`}
-            cell={cell}
-            label={label}
-            selected={isSelected}
-            dirty={dirty}
-            onClick={() => onCellClick(cell.row, cell.col)}
+    <div className="w-full overflow-x-auto">
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: matrix-positioned keycap grid; interactions live on each <button> child, the wrapper only catches mouseleave to clear hover state */}
+      {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: aria-label functions as a region label for the keymap grid */}
+      <div
+        aria-label="kobu キーマップ"
+        className="relative select-none mx-auto"
+        style={{ width: `${width}px`, height: `${height}px` }}
+        onMouseLeave={() => onCellHover?.(null)}
+      >
+        {midlineX !== null && (
+          <div
+            aria-hidden
+            className="absolute top-2 bottom-2 w-px border-l border-dashed border-zinc-300 dark:border-zinc-700"
+            style={{ left: `${midlineX}px` }}
           />
-        );
-      })}
-    </svg>
+        )}
+        {cells.map((cell) => {
+          const value = keymap[cell.row]?.[cell.col] ?? 0;
+          const label = labelForKeycode(value, { definition });
+          const isSelected =
+            selected !== null && selected.row === cell.row && selected.col === cell.col;
+          const dirty = isDirty(cell.row, cell.col);
+          return (
+            <Keycap
+              key={`${cell.row}-${cell.col}`}
+              cell={cell}
+              label={label}
+              selected={isSelected}
+              dirty={dirty}
+              onClick={() => onCellClick(cell.row, cell.col)}
+              onMouseEnter={() => onCellHover?.({ row: cell.row, col: cell.col })}
+            />
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
-interface KeyCellProps {
+interface KeycapProps {
   cell: Cell;
   label: KeyLabel;
   selected: boolean;
   dirty: boolean;
   onClick: () => void;
+  onMouseEnter?: () => void;
 }
 
-function KeyCell({ cell, label, selected, dirty, onClick }: KeyCellProps) {
-  const x = PADDING + cell.x * UNIT + GAP / 2;
-  const y = PADDING + cell.y * UNIT + GAP / 2;
+function Keycap({ cell, label, selected, dirty, onClick, onMouseEnter }: KeycapProps) {
+  const left = PADDING + cell.x * UNIT + GAP / 2;
+  const top = PADDING + cell.y * UNIT + GAP / 2;
   const w = cell.w * UNIT - GAP;
   const h = cell.h * UNIT - GAP;
 
-  const fill = toneFill(label.tone);
-  const stroke = selected ? '#2563eb' : '#d4d4d8';
-  const strokeWidth = selected ? 2 : 1;
-
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: SVG <g> with aria-label + keyboard handler — semantic buttons inside SVG would distort layout
-    <g
+    <button
+      type="button"
       aria-label={`行 ${cell.row} 列 ${cell.col}: ${label.long}`}
+      aria-pressed={selected}
+      title={label.long}
       onClick={onClick}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onClick();
-        }
+      onMouseEnter={onMouseEnter}
+      onFocus={onMouseEnter}
+      className={[
+        'absolute flex flex-col items-center justify-center',
+        'rounded-lg border text-zinc-900 dark:text-zinc-50',
+        'transition-[transform,box-shadow,background-color] duration-100',
+        'shadow-sm hover:-translate-y-px hover:shadow-md',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-50 dark:focus-visible:ring-offset-zinc-950',
+        cellTone(label.tone),
+        selected
+          ? 'ring-2 ring-sky-500 ring-offset-1 ring-offset-zinc-50 dark:ring-offset-zinc-950 -translate-y-px shadow-md'
+          : '',
+      ].join(' ')}
+      style={{
+        left: `${left}px`,
+        top: `${top}px`,
+        width: `${w}px`,
+        height: `${h}px`,
       }}
-      className="cursor-pointer focus:outline-none"
     >
-      <rect
-        x={x}
-        y={y}
-        width={w}
-        height={h}
-        rx={6}
-        ry={6}
-        fill={fill}
-        stroke={stroke}
-        strokeWidth={strokeWidth}
-        filter="url(#keycap-shadow)"
-        className="transition-colors hover:fill-zinc-100 dark:hover:fill-zinc-700"
-      />
-      <text
-        x={x + w / 2}
-        y={y + h / 2}
-        textAnchor="middle"
-        dominantBaseline="middle"
-        fontSize={fontSizeFor(label.short)}
-        fontFamily="ui-sans-serif, system-ui, sans-serif"
-        fill={textFill(label.tone)}
-        className="pointer-events-none"
+      {label.top !== '' && (
+        <span
+          className={[
+            'absolute left-1 right-1 top-1 text-[9px] font-bold tracking-tight leading-none',
+            'truncate text-center pointer-events-none',
+            accentText(label.accent),
+          ].join(' ')}
+        >
+          {label.top}
+        </span>
+      )}
+      <span
+        className={[
+          'pointer-events-none font-medium leading-none text-center px-0.5',
+          centerSize(label.center),
+          label.tone === 'muted' ? 'text-zinc-400 dark:text-zinc-600' : '',
+        ].join(' ')}
       >
-        {label.short}
-      </text>
+        {label.center}
+      </span>
+      {label.bottom !== '' && (
+        <span className="absolute bottom-1 left-1 right-1 text-[9px] leading-none text-zinc-500 dark:text-zinc-400 truncate text-center pointer-events-none">
+          {label.bottom}
+        </span>
+      )}
       {dirty && (
-        <circle
-          cx={x + w - 6}
-          cy={y + 6}
-          r={3}
-          fill="#f59e0b"
-          stroke="#fff"
-          strokeWidth={0.8}
-          aria-label="未保存の変更あり"
+        <span
+          title="未保存の変更あり"
+          className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-500 ring-2 ring-zinc-50 dark:ring-zinc-950"
         />
       )}
-    </g>
+    </button>
   );
 }
 
-function fontSizeFor(short: string): number {
-  if (short.length <= 1) return 22;
-  if (short.length <= 2) return 18;
-  if (short.length <= 4) return 14;
-  if (short.length <= 6) return 12;
-  return 10;
+function centerSize(text: string): string {
+  if (text.length <= 1) return 'text-lg';
+  if (text.length <= 2) return 'text-base';
+  if (text.length <= 4) return 'text-sm';
+  if (text.length <= 6) return 'text-xs';
+  return 'text-[10px]';
 }
 
-function toneFill(tone: KeyLabel['tone']): string {
+function cellTone(tone: KeyLabel['tone']): string {
   switch (tone) {
     case 'muted':
-      return '#fafafa';
+      return 'bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800';
     case 'layer':
-      return '#dbeafe';
+      return 'bg-indigo-50 dark:bg-indigo-950/60 border-indigo-200 dark:border-indigo-900';
     case 'mod':
-      return '#e9d5ff';
+      return 'bg-violet-50 dark:bg-violet-950/60 border-violet-200 dark:border-violet-900';
     case 'user':
-      return '#fef3c7';
+      return 'bg-amber-50 dark:bg-amber-950/50 border-amber-200 dark:border-amber-900';
     case 'mouse':
-      return '#dcfce7';
+      return 'bg-emerald-50 dark:bg-emerald-950/60 border-emerald-200 dark:border-emerald-900';
     case 'media':
-      return '#fce7f3';
+      return 'bg-rose-50 dark:bg-rose-950/60 border-rose-200 dark:border-rose-900';
     case 'other':
-      return '#f3f4f6';
+      return 'bg-zinc-100 dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700';
     default:
-      return '#ffffff';
+      return 'bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700';
   }
 }
 
-function textFill(tone: KeyLabel['tone']): string {
-  return tone === 'muted' ? '#a1a1aa' : '#18181b';
+function accentText(accent: KeyLabel['accent']): string {
+  switch (accent) {
+    case 'mod':
+      return 'text-violet-700 dark:text-violet-300';
+    case 'layer':
+      return 'text-indigo-700 dark:text-indigo-300';
+    case 'tap-hold':
+      return 'text-sky-700 dark:text-sky-300';
+    case 'special':
+      return 'text-zinc-600 dark:text-zinc-400';
+    default:
+      return 'text-zinc-500 dark:text-zinc-400';
+  }
 }
 
 export interface BuildCellsOptions {

@@ -245,11 +245,14 @@ describe('useConnectionStore', () => {
     if (state.kind === 'ready') expect(state.definitionFromCache).toBe(true);
   });
 
-  it('promptConnect surfaces a TransportError kind on handshake send-failed', async () => {
+  it('promptConnect surfaces a TransportError kind on persistent handshake send-failed', async () => {
     const device = createMockDevice();
     fakeHid.requestDevice.mockResolvedValueOnce([device]);
     const { TransportError } = await import('../transport/types');
-    mockPerformHandshake.mockRejectedValueOnce(
+    // send-failed is transient — the store retries up to 3 times. Use
+    // a persistent rejection so every retry fails and the kind bubbles
+    // through to the error state.
+    mockPerformHandshake.mockRejectedValue(
       new TransportError('send-failed', 'simulated send failure'),
     );
 
@@ -275,6 +278,71 @@ describe('useConnectionStore', () => {
     if (state.kind === 'error') {
       expect(state.errorKind).toBe('unknown');
     }
+  });
+
+  it('promptConnect retries the handshake on a transient receive-timeout and succeeds on the second attempt', async () => {
+    const device = createMockDevice();
+    fakeHid.requestDevice.mockResolvedValueOnce([device]);
+    const { TransportError } = await import('../transport/types');
+    // First attempt: simulate the dropped-first-packet failure mode.
+    mockPerformHandshake.mockRejectedValueOnce(
+      new TransportError('receive-timeout', 'kobu did not reply within timeout'),
+    );
+    // Second attempt: succeeds.
+    mockPerformHandshake.mockResolvedValueOnce(fakeHandshakeResult());
+
+    await useConnectionStore.getState().promptConnect();
+
+    expect(mockPerformHandshake).toHaveBeenCalledTimes(2);
+    expect(useConnectionStore.getState().state.kind).toBe('ready');
+  });
+
+  it('promptConnect retries up to 3 times, then surfaces the final transient error', async () => {
+    const device = createMockDevice();
+    fakeHid.requestDevice.mockResolvedValueOnce([device]);
+    const { TransportError } = await import('../transport/types');
+    mockPerformHandshake.mockRejectedValue(new TransportError('receive-timeout', 'flaky'));
+
+    await useConnectionStore.getState().promptConnect();
+
+    expect(mockPerformHandshake).toHaveBeenCalledTimes(3);
+    const state = useConnectionStore.getState().state;
+    expect(state.kind).toBe('error');
+    if (state.kind === 'error') {
+      expect(state.errorKind).toBe('receive-timeout');
+    }
+  });
+
+  it('promptConnect does not retry on non-transient errors (open-failed surfaces immediately)', async () => {
+    const device = createMockDevice();
+    (device.open as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('Access denied'));
+    fakeHid.requestDevice.mockResolvedValueOnce([device]);
+
+    await useConnectionStore.getState().promptConnect();
+
+    // open-failed bubbles out of the very first attempt — the
+    // handshake is never even called.
+    expect(mockPerformHandshake).not.toHaveBeenCalled();
+    const state = useConnectionStore.getState().state;
+    expect(state.kind).toBe('error');
+    if (state.kind === 'error') {
+      expect(state.errorKind).toBe('open-failed');
+    }
+  });
+
+  it('promptConnect retries on transient send-failed', async () => {
+    const device = createMockDevice();
+    fakeHid.requestDevice.mockResolvedValueOnce([device]);
+    const { TransportError } = await import('../transport/types');
+    mockPerformHandshake.mockRejectedValueOnce(
+      new TransportError('send-failed', 'transient send error'),
+    );
+    mockPerformHandshake.mockResolvedValueOnce(fakeHandshakeResult());
+
+    await useConnectionStore.getState().promptConnect();
+
+    expect(mockPerformHandshake).toHaveBeenCalledTimes(2);
+    expect(useConnectionStore.getState().state.kind).toBe('ready');
   });
 
   it('promptConnect is a no-op when the store is already connecting', async () => {

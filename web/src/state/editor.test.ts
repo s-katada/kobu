@@ -15,15 +15,22 @@ class FakeTransport {
   cols = 10;
   /** Flat layers*rows*cols u16 buffer. */
   keymap: number[];
+  /** Snapshot the firmware "factory defaults" — used by DynamicKeymapReset. */
+  defaults: number[];
   locked = false;
   failOn: number | null = null;
+  /** When non-null, every sendAndReceive throws this many times before
+   *  succeeding. The test sets it to simulate transient I/O failures. */
+  receiveFailuresRemaining = 0;
   writes: Array<{ layer: number; row: number; col: number; code: number }> = [];
+  resetCount = 0;
 
   constructor() {
-    this.keymap = Array.from(
+    this.defaults = Array.from(
       { length: this.layers * this.rows * this.cols },
       (_, i) => (i % 26) + 0x04,
     );
+    this.keymap = this.defaults.slice();
   }
 
   cellIndex(layer: number, row: number, col: number): number {
@@ -69,6 +76,11 @@ class FakeTransport {
       reply[1] = 0;
       reply[2] = 0xff;
       reply[3] = 0xff;
+    } else if (cmd === 0x06) {
+      // DynamicKeymapReset — clobber keymap back to firmware defaults.
+      this.resetCount += 1;
+      this.keymap = this.defaults.slice();
+      reply[0] = 0x06;
     }
 
     return intoVialPacket(reply);
@@ -316,6 +328,62 @@ describe('useEditorStore', () => {
     };
     await useEditorStore.getState().reloadFromDevice();
     expect(useEditorStore.getState().phase.kind).toBe('error');
+  });
+
+  it('resetToDefault wipes local edits and reloads the firmware default keymap', async () => {
+    const fake = new FakeTransport();
+    await useEditorStore.getState().attach(fake as unknown as WebHidTransport, definition());
+    // Make some edits, then ask for a factory reset.
+    useEditorStore.getState().setKey({ layer: 0, row: 0, col: 0 }, 0x29);
+    useEditorStore.getState().setKey({ layer: 1, row: 2, col: 3 }, 0x2a);
+    expect(selectIsDirty(useEditorStore.getState())).toBe(true);
+
+    await useEditorStore.getState().resetToDefault();
+    const state = useEditorStore.getState();
+
+    expect(fake.resetCount).toBe(1);
+    expect(state.phase.kind).toBe('ready');
+    expect(state.baseline?.[0]?.[0]?.[0]).toBe(0x04); // firmware default at index 0
+    expect(state.local).toEqual(state.baseline);
+    expect(selectIsDirty(state)).toBe(false);
+    expect(state.undoStack).toHaveLength(0);
+    expect(state.redoStack).toHaveLength(0);
+    expect(state.selected).toBeNull();
+  });
+
+  it('resetToDefault refuses to run while the device is locked', async () => {
+    const fake = new FakeTransport();
+    fake.locked = true;
+    await useEditorStore.getState().attach(fake as unknown as WebHidTransport, definition());
+
+    await useEditorStore.getState().resetToDefault();
+
+    expect(fake.resetCount).toBe(0);
+    expect(useEditorStore.getState().phase.kind).toBe('error');
+  });
+
+  it('resetToDefault surfaces an error when the reset command throws', async () => {
+    const fake = new FakeTransport();
+    await useEditorStore.getState().attach(fake as unknown as WebHidTransport, definition());
+    // Break the next sendAndReceive — the reset is the first call after
+    // the unlock-status check, so the reset itself will throw.
+    let count = 0;
+    const original = fake.sendAndReceive.bind(fake);
+    fake.sendAndReceive = async (packet: VialPacket) => {
+      // First call is the unlock-status probe — let it pass.
+      if (count === 0) {
+        count += 1;
+        return original(packet);
+      }
+      throw new Error('forced reset failure');
+    };
+
+    await useEditorStore.getState().resetToDefault();
+    const state = useEditorStore.getState();
+    expect(state.phase.kind).toBe('error');
+    if (state.phase.kind === 'error') {
+      expect(state.phase.message).toContain('forced reset failure');
+    }
   });
 
   it('detach resets the entire store', async () => {

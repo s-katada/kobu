@@ -85,20 +85,39 @@ describe('encoders round-trip via the decoder', () => {
 
 describe('labelForKeycode', () => {
   it('returns a short letter label for basic keys', () => {
-    expect(labelForKeycode(0x04)).toMatchObject({ short: 'A', tone: 'normal' });
+    expect(labelForKeycode(0x04)).toMatchObject({
+      short: 'A',
+      center: 'A',
+      top: '',
+      tone: 'normal',
+      accent: 'none',
+    });
   });
 
-  it('renders compound labels for MT, LT, WM', () => {
+  it('splits MT into a centred tap label and a top hold-badge', () => {
     const mt = labelForKeycode(encodeMT(0x04, MOD_CTRL));
+    expect(mt.center).toBe('A');
+    expect(mt.top).toBe('LC');
+    expect(mt.accent).toBe('tap-hold');
+    expect(mt.long).toContain('MT(');
+    // short still useful for callers (combo / macro rows)
     expect(mt.short).toContain('LC');
     expect(mt.short).toContain('A');
-    expect(mt.long).toContain('MT(');
+  });
 
+  it('splits LT into tap-key centre and L<n> top-badge', () => {
     const lt = labelForKeycode(encodeLT(3, 0x04));
+    expect(lt.center).toBe('A');
+    expect(lt.top).toBe('L3');
+    expect(lt.accent).toBe('tap-hold');
     expect(lt.short).toBe('L3/A');
-    expect(lt.tone).toBe('layer');
+  });
 
+  it('splits WM into centred key and modifier badge', () => {
     const wm = labelForKeycode(encodeWM(0x04, MOD_SHIFT));
+    expect(wm.center).toBe('A');
+    expect(wm.top).toBe('LS');
+    expect(wm.accent).toBe('mod');
     expect(wm.long).toContain('LS+');
   });
 
@@ -113,20 +132,35 @@ describe('labelForKeycode', () => {
     };
     const u0 = labelForKeycode(0x7e00, { definition });
     expect(u0.short).toBe('BT0');
+    expect(u0.center).toBe('BT0');
     expect(u0.tone).toBe('user');
+
+    const u1 = labelForKeycode(0x7e01, { definition });
+    // multi-line shortName splits into center + bottom on the keycap
+    expect(u1.center).toBe('Next');
+    expect(u1.bottom).toBe('BT');
 
     const u4 = labelForKeycode(0x7e04, { definition });
     expect(u4.short).toBe('U4');
+    expect(u4.center).toBe('U4');
   });
 
-  it('renders TG and MO labels with the layer number', () => {
-    expect(labelForKeycode(encodeMO(2)).short).toBe('MO2');
-    expect(labelForKeycode(encodeTG(1)).short).toBe('TG1');
+  it('renders TG and MO labels with the layer number and a kind badge', () => {
+    const mo = labelForKeycode(encodeMO(2));
+    expect(mo.center).toBe('L2');
+    expect(mo.top).toBe('MO');
+    expect(mo.short).toBe('MO2');
+
+    const tg = labelForKeycode(encodeTG(1));
+    expect(tg.center).toBe('L1');
+    expect(tg.top).toBe('TG');
   });
 
   it('falls back to a raw hex label for unknown ranges', () => {
     const label = labelForKeycode(0x6abc);
     expect(label.long).toBe('未対応 0x6abc');
+    expect(label.center).toBe('?');
+    expect(label.bottom).toBe('0x6abc');
   });
 });
 

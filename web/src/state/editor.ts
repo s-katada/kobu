@@ -29,6 +29,7 @@ import {
   fetchLayerCount,
   type Keymap,
   type KeymapDimensions,
+  resetKeymap,
   setKeycode,
 } from '../protocol/keymap';
 import { fetchUnlockStatus } from '../protocol/unlock';
@@ -78,6 +79,13 @@ export interface EditorState {
   save: () => Promise<void>;
   /** Drop the local-only edits and re-sync from the device. */
   reloadFromDevice: () => Promise<void>;
+  /**
+   * Tell the firmware to wipe the dynamic keymap back to its
+   * build-time defaults, then re-read the keymap from the device so
+   * the editor reflects the new baseline. Macros / combos / morses
+   * are NOT touched — this is a layer-keymap-only reset.
+   */
+  resetToDefault: () => Promise<void>;
 }
 
 function cloneKeymap(km: Keymap): Keymap {
@@ -322,6 +330,45 @@ export const useEditorStore = create<EditorState>((set, get) => ({
       });
     } catch (err) {
       set({ phase: { kind: 'error', message: String(err) } });
+    }
+  },
+
+  resetToDefault: async () => {
+    const { transport, dimensions } = get();
+    if (!transport || !dimensions) return;
+    // Surface the same locked-device error path as `save` — the
+    // firmware silently ignores DynamicKeymapReset when locked, so we
+    // check up-front instead of pretending the reset worked.
+    try {
+      const status = await fetchUnlockStatus(transport);
+      if (status.locked) {
+        set({
+          phase: {
+            kind: 'error',
+            message:
+              'デバイスがロックされています。アンロックコード（両外側 pinky 同時押し）を保持して書き込みを許可してください。',
+          },
+        });
+        return;
+      }
+    } catch (err) {
+      set({ phase: { kind: 'error', message: `アンロック状態の取得に失敗しました: ${err}` } });
+      return;
+    }
+    try {
+      set({ phase: { kind: 'loading' } });
+      await resetKeymap(transport);
+      const km = await fetchKeymap(transport, dimensions);
+      set({
+        baseline: km,
+        local: cloneKeymap(km),
+        undoStack: [],
+        redoStack: [],
+        selected: null,
+        phase: { kind: 'ready' },
+      });
+    } catch (err) {
+      set({ phase: { kind: 'error', message: `デフォルトへのリセットに失敗しました: ${err}` } });
     }
   },
 }));

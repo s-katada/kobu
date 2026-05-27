@@ -32,6 +32,104 @@ import {
   WebHidTransport,
 } from '../transport/webhid';
 
+/**
+ * How many times we'll retry the open+handshake sequence before giving
+ * up on a connection attempt. The first send-after-open is dropped
+ * routinely on macOS BLE-HID and occasionally over plain USB, so a
+ * single attempt regularly fails for kobu users; experimentation
+ * showed two retries cleared "intermittent connect" complaints
+ * entirely. Higher numbers just delay the eventual error message.
+ */
+const HANDSHAKE_MAX_ATTEMPTS = 3;
+
+/**
+ * Delay we sleep between consecutive open+handshake attempts. The
+ * intent is to give the OS HID stack a beat to release the dropped
+ * report queue before we open the device a second time. Tuned by
+ * hand — anything below 100 ms still reproduces the original failure
+ * on the worst-case macOS BLE path.
+ */
+const HANDSHAKE_RETRY_DELAY_MS = 200;
+
+/**
+ * Delay we sleep immediately after `device.open()` resolves, before
+ * the very first `sendReport`. Without this, the first packet on a
+ * freshly-opened BLE-HID handle is silently dropped on macOS. 80 ms
+ * is the smallest value we observed to be reliable across the kobu
+ * hosts we tested on (M1 mac BLE, Linux USB, Chrome Android USB-OTG).
+ */
+const POST_OPEN_SETTLE_MS = 80;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * `receive-timeout` and `send-failed` mean a packet was lost in
+ * transit — retry is safe because Vial commands are idempotent (every
+ * command we issue during the handshake is a pure GET) and the
+ * transport will be opened fresh on each retry. `open-failed` and
+ * `webhid-unsupported` indicate persistent environment problems where
+ * a retry is just user-visible latency, so we bail immediately.
+ */
+function isTransientHandshakeError(err: unknown): boolean {
+  if (!(err instanceof TransportError)) return false;
+  return err.kind === 'receive-timeout' || err.kind === 'send-failed';
+}
+
+/**
+ * One attempt: open the transport, wait briefly, run the handshake.
+ * Closes the transport on failure so the caller never has to.
+ */
+async function openAndHandshakeOnce(
+  device: HIDDevice,
+): Promise<{ transport: WebHidTransport; handshake: HandshakeResult }> {
+  const transport = await WebHidTransport.open(device);
+  try {
+    await sleep(POST_OPEN_SETTLE_MS);
+    const handshake = await performHandshake(transport);
+    return { transport, handshake };
+  } catch (err) {
+    try {
+      await transport.close();
+    } catch {
+      // Already failing — closing a stale transport may throw, ignore.
+    }
+    throw err;
+  }
+}
+
+/**
+ * Retry the open+handshake sequence on transient transport errors.
+ *
+ * Kobu's first sendReport after `device.open()` is dropped routinely
+ * over macOS BLE-HID and occasionally over plain USB. Rather than
+ * surface "connection failed — please try again" and force the user
+ * to click Connect 2–3 times, we do those retries ourselves with a
+ * small backoff between each.
+ *
+ * Non-transient errors (open-failed, webhid-unsupported, …) bubble up
+ * on the first attempt — there's nothing to be gained by retrying
+ * them. The last transient error is rethrown if all attempts fail.
+ */
+export async function openAndHandshakeWithRetries(
+  device: HIDDevice,
+  maxAttempts: number = HANDSHAKE_MAX_ATTEMPTS,
+): Promise<{ transport: WebHidTransport; handshake: HandshakeResult; attempts: number }> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (attempt > 1) await sleep(HANDSHAKE_RETRY_DELAY_MS);
+    try {
+      const result = await openAndHandshakeOnce(device);
+      return { ...result, attempts: attempt };
+    } catch (err) {
+      lastError = err;
+      if (!isTransientHandshakeError(err)) throw err;
+    }
+  }
+  throw lastError;
+}
+
 export type ConnectionState =
   | { kind: 'unsupported' }
   | { kind: 'idle' }
@@ -109,8 +207,9 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => {
     set({ state: { kind: 'connecting' } });
     let transport: WebHidTransport | null = null;
     try {
-      transport = await WebHidTransport.open(device);
-      const handshake = await performHandshake(transport);
+      const result = await openAndHandshakeWithRetries(device);
+      transport = result.transport;
+      const handshake = result.handshake;
       if (!handshake.isKobu) {
         set({
           state: {

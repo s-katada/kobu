@@ -86,24 +86,53 @@ describe('Editor integration', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('attaches the editor store and renders toolbar + SVG once ready', async () => {
+  it('attaches the editor store and renders toolbar + keymap once ready', async () => {
     primeReady();
     render(<Editor />);
     await waitFor(() => expect(useEditorStore.getState().phase.kind).toBe('ready'));
     expect(screen.getAllByRole('tab').length).toBe(4);
-    // The SVG cells render their short labels — A appears multiple times for the
+    // Keycaps render their centred label — A appears multiple times for the
     // uniform 0x04 / "A" keymap.
     expect(screen.getAllByText('A').length).toBeGreaterThan(0);
   });
 
-  it('clicking a key cell opens the KeycodePicker', async () => {
+  it('clicking a key cell selects it and surfaces it in the dock', async () => {
     primeReady();
     render(<Editor />);
     await waitFor(() => expect(useEditorStore.getState().phase.kind).toBe('ready'));
     const cells = screen.getAllByLabelText(/行 0 列 0/);
     if (!cells[0]) throw new Error('cell not found');
     await userEvent.click(cells[0]);
-    expect(screen.getByRole('dialog', { name: 'キーコードを選択' })).toBeInTheDocument();
+    // The selection lands in the editor store.
+    expect(useEditorStore.getState().selected).toEqual({ layer: 0, row: 0, col: 0 });
+    // And the dock summary text reflects it.
+    expect(screen.getByText(/選択中:/)).toBeInTheDocument();
+    expect(screen.getByText('行 0 列 0')).toBeInTheDocument();
+  });
+
+  it('arrow keys move the selection within the active layer', async () => {
+    primeReady();
+    render(<Editor />);
+    await waitFor(() => expect(useEditorStore.getState().phase.kind).toBe('ready'));
+
+    useEditorStore.getState().selectCell({ layer: 0, row: 1, col: 2 });
+    await userEvent.keyboard('{ArrowRight}');
+    expect(useEditorStore.getState().selected).toEqual({ layer: 0, row: 1, col: 3 });
+    await userEvent.keyboard('{ArrowDown}');
+    expect(useEditorStore.getState().selected).toEqual({ layer: 0, row: 2, col: 3 });
+    await userEvent.keyboard('{ArrowLeft}{ArrowUp}');
+    expect(useEditorStore.getState().selected).toEqual({ layer: 0, row: 1, col: 2 });
+  });
+
+  it('Backspace clears the selected cell to KC_NO', async () => {
+    primeReady();
+    render(<Editor />);
+    await waitFor(() => expect(useEditorStore.getState().phase.kind).toBe('ready'));
+
+    useEditorStore.getState().selectCell({ layer: 0, row: 0, col: 0 });
+    await userEvent.keyboard('{Backspace}');
+    const km = useEditorStore.getState().local;
+    expect(km?.[0]?.[0]?.[0]).toBe(0); // KC_NO
   });
 
   it('shows the BluetoothPanel when activeLayer is 3', async () => {

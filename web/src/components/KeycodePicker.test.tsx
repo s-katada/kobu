@@ -95,10 +95,9 @@ describe('KeycodePicker', () => {
   it('Tap/Hold tab → MO buttons emit the right encoded keycode', async () => {
     const { onPick } = open();
     await userEvent.click(screen.getByRole('button', { name: 'タップ/ホールド' }));
-    // The MO row has 4 buttons (0..3). Pick layer 2.
-    const moButtons = screen.getAllByRole('button', { name: '2' });
-    // Two "2" buttons exist (MO, TO, TG, DF, OSL × layer 2) — first MO row is first set of 5.
-    await userEvent.click(moButtons[0] as HTMLElement);
+    // Each MO / TO / TG / DF / OSL layer button has a unique aria-label
+    // built from its kind + layer number, so layer 2 of MO is exact.
+    await userEvent.click(screen.getByRole('button', { name: 'MO(2)' }));
     expect(onPick).toHaveBeenCalledWith(encodeMO(2));
   });
 

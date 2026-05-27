@@ -23,6 +23,7 @@ export function EditorToolbar() {
   const redo = useEditorStore((s) => s.redo);
   const save = useEditorStore((s) => s.save);
   const resetSelectionToBaseline = useEditorStore((s) => s.resetSelectionToBaseline);
+  const resetToDefault = useEditorStore((s) => s.resetToDefault);
   const dirtyMask = useEditorStore(selectDirtyLayerMask);
   const dirty = useEditorStore(selectIsDirty);
   const undoCount = useEditorStore((s) => s.undoStack.length);
@@ -123,6 +124,24 @@ export function EditorToolbar() {
           className="rounded-md border border-zinc-300 dark:border-zinc-700 px-3 py-1.5 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-900 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           選択セルを元に戻す
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            // Destructive — wipes the entire user-customised keymap.
+            // Confirm before issuing the firmware-side reset so an
+            // accidental click can't silently nuke hours of editing.
+            const ok = window.confirm(
+              'キーマップをファームウェア初期値に戻します。すべてのレイヤーの編集内容が失われます。続行しますか？',
+            );
+            if (!ok) return;
+            void resetToDefault();
+          }}
+          disabled={saving}
+          className="rounded-md border border-rose-300 dark:border-rose-800 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/40 px-3 py-1.5 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
+          title="ファームウェアの組み込み既定値にすべてのレイヤーを上書きします"
+        >
+          デフォルトに戻す
         </button>
         <button
           type="button"

@@ -1098,90 +1098,230 @@ export interface LabelOptions {
 }
 
 export interface KeyLabel {
-  /** Short label suitable for a 4×10 SVG cell. */
+  /**
+   * Compact one-line label kept for callers that paint a tiny preview
+   * (combo / macro / morse rows). New code should prefer
+   * `{top, center, bottom}` for a proper multi-line keycap render.
+   */
   short: string;
-  /** Longer label for the picker / tooltip. */
+  /** Big text shown in the centre of a keycap. */
+  center: string;
+  /**
+   * Small label shown above `center` — typically the hold action of a
+   * tap-hold encoding, the held modifier of a WM, or a kind-prefix
+   * ("MO", "TG", "OSL") for parametric layer toggles.
+   */
+  top: string;
+  /** Optional small label below `center` (alternate glyph, hint). */
+  bottom: string;
+  /** Long human-friendly description for tooltip / picker. */
   long: string;
-  /** Cell tint hint — used by the SVG renderer. */
+  /** Cell tint hint — used by the renderer. */
   tone: 'normal' | 'muted' | 'layer' | 'mod' | 'user' | 'mouse' | 'media' | 'other';
+  /** Top-badge tint hint (also implies the badge is rendered). */
+  accent: 'none' | 'mod' | 'layer' | 'tap-hold' | 'special';
 }
+
+const EMPTY = '' as const;
 
 export function labelForKeycode(code: number, options: LabelOptions = {}): KeyLabel {
   const decoded = decodeKeycode(code);
   switch (decoded.kind) {
     case 'no':
-      return { short: '', long: 'なし', tone: 'muted' };
+      return {
+        short: EMPTY,
+        center: EMPTY,
+        top: EMPTY,
+        bottom: EMPTY,
+        long: 'なし',
+        tone: 'muted',
+        accent: 'none',
+      };
     case 'transparent':
-      return { short: '▽', long: '透過', tone: 'muted' };
+      return {
+        short: '▽',
+        center: '▽',
+        top: EMPTY,
+        bottom: EMPTY,
+        long: '透過',
+        tone: 'muted',
+        accent: 'none',
+      };
     case 'basic': {
       const meta = decoded.meta;
       const tone = toneForCategory(meta.category);
-      return { short: meta.shortLabel, long: meta.label, tone };
+      return {
+        short: meta.shortLabel,
+        center: meta.shortLabel,
+        top: EMPTY,
+        bottom: EMPTY,
+        long: meta.label,
+        tone,
+        accent: 'none',
+      };
     }
     case 'wm': {
       const inner = lookupBase(decoded.kc);
-      const innerLabel = inner?.shortLabel ?? `0x${decoded.kc.toString(16)}`;
+      const innerShort = inner?.shortLabel ?? `0x${decoded.kc.toString(16)}`;
       const mod = formatModifiers(decoded.mod);
       return {
-        short: `${mod}+${innerLabel}`,
-        long: `${mod}+${inner?.label ?? innerLabel}`,
-        tone: 'mod',
+        short: `${mod}+${innerShort}`,
+        center: innerShort,
+        top: mod,
+        bottom: EMPTY,
+        long: `${mod}+${inner?.label ?? innerShort}`,
+        tone: 'normal',
+        accent: 'mod',
       };
     }
     case 'mt': {
       const inner = lookupBase(decoded.kc);
-      const innerLabel = inner?.shortLabel ?? `0x${decoded.kc.toString(16)}`;
+      const innerShort = inner?.shortLabel ?? `0x${decoded.kc.toString(16)}`;
       const mod = formatModifiers(decoded.mod);
       return {
-        short: `${mod}/${innerLabel}`,
-        long: `MT(${inner?.label ?? innerLabel}, ${mod})`,
-        tone: 'mod',
+        short: `${mod}/${innerShort}`,
+        center: innerShort,
+        top: mod,
+        bottom: EMPTY,
+        long: `MT(${inner?.label ?? innerShort}, ${mod})  ・タップで${inner?.label ?? innerShort}、ホールドで${mod}`,
+        tone: 'normal',
+        accent: 'tap-hold',
       };
     }
     case 'lt': {
       const inner = lookupBase(decoded.kc);
-      const innerLabel = inner?.shortLabel ?? `0x${decoded.kc.toString(16)}`;
+      const innerShort = inner?.shortLabel ?? `0x${decoded.kc.toString(16)}`;
       return {
-        short: `L${decoded.layer}/${innerLabel}`,
-        long: `LT(${decoded.layer}, ${inner?.label ?? innerLabel})`,
-        tone: 'layer',
+        short: `L${decoded.layer}/${innerShort}`,
+        center: innerShort,
+        top: `L${decoded.layer}`,
+        bottom: EMPTY,
+        long: `LT(${decoded.layer}, ${inner?.label ?? innerShort})  ・タップで${inner?.label ?? innerShort}、ホールドでレイヤー${decoded.layer}`,
+        tone: 'normal',
+        accent: 'tap-hold',
       };
     }
-    case 'lm':
+    case 'lm': {
+      const mod = formatModifiers(decoded.mod);
       return {
-        short: `L${decoded.layer}+${formatModifiers(decoded.mod)}`,
-        long: `LM(${decoded.layer}, ${formatModifiers(decoded.mod)})`,
+        short: `L${decoded.layer}+${mod}`,
+        center: `L${decoded.layer}`,
+        top: mod,
+        bottom: EMPTY,
+        long: `LM(${decoded.layer}, ${mod})  ・レイヤー${decoded.layer}と${mod}を同時に有効化`,
         tone: 'layer',
+        accent: 'mod',
       };
+    }
     case 'to':
-      return { short: `TO${decoded.layer}`, long: `TO(${decoded.layer})`, tone: 'layer' };
+      return {
+        short: `TO${decoded.layer}`,
+        center: `L${decoded.layer}`,
+        top: 'TO',
+        bottom: EMPTY,
+        long: `TO(${decoded.layer})  ・レイヤー${decoded.layer}に切替`,
+        tone: 'layer',
+        accent: 'layer',
+      };
     case 'mo':
-      return { short: `MO${decoded.layer}`, long: `MO(${decoded.layer})`, tone: 'layer' };
+      return {
+        short: `MO${decoded.layer}`,
+        center: `L${decoded.layer}`,
+        top: 'MO',
+        bottom: EMPTY,
+        long: `MO(${decoded.layer})  ・押している間レイヤー${decoded.layer}`,
+        tone: 'layer',
+        accent: 'layer',
+      };
     case 'df':
-      return { short: `DF${decoded.layer}`, long: `DF(${decoded.layer})`, tone: 'layer' };
+      return {
+        short: `DF${decoded.layer}`,
+        center: `L${decoded.layer}`,
+        top: 'DF',
+        bottom: EMPTY,
+        long: `DF(${decoded.layer})  ・既定レイヤーをレイヤー${decoded.layer}に`,
+        tone: 'layer',
+        accent: 'layer',
+      };
     case 'tg':
-      return { short: `TG${decoded.layer}`, long: `TG(${decoded.layer})`, tone: 'layer' };
+      return {
+        short: `TG${decoded.layer}`,
+        center: `L${decoded.layer}`,
+        top: 'TG',
+        bottom: EMPTY,
+        long: `TG(${decoded.layer})  ・レイヤー${decoded.layer}をトグル`,
+        tone: 'layer',
+        accent: 'layer',
+      };
     case 'osl':
-      return { short: `OSL${decoded.layer}`, long: `OSL(${decoded.layer})`, tone: 'layer' };
+      return {
+        short: `OSL${decoded.layer}`,
+        center: `L${decoded.layer}`,
+        top: 'OSL',
+        bottom: EMPTY,
+        long: `OSL(${decoded.layer})  ・次の1キーだけレイヤー${decoded.layer}`,
+        tone: 'layer',
+        accent: 'layer',
+      };
     case 'osm': {
       const mod = formatModifiers(decoded.mod);
-      return { short: `OSM ${mod}`, long: `OSM(${mod})`, tone: 'mod' };
+      return {
+        short: `OSM ${mod}`,
+        center: mod || '?',
+        top: 'OSM',
+        bottom: EMPTY,
+        long: `OSM(${mod})  ・次の1キーだけ${mod}`,
+        tone: 'mod',
+        accent: 'special',
+      };
     }
     case 'morse':
-      return { short: `TD${decoded.index}`, long: `TD(${decoded.index})`, tone: 'other' };
+      return {
+        short: `TD${decoded.index}`,
+        center: `TD${decoded.index}`,
+        top: EMPTY,
+        bottom: EMPTY,
+        long: `TD(${decoded.index})  ・タップダンス`,
+        tone: 'other',
+        accent: 'none',
+      };
     case 'macro':
-      return { short: `M${decoded.index}`, long: `マクロ ${decoded.index}`, tone: 'other' };
+      return {
+        short: `M${decoded.index}`,
+        center: `M${decoded.index}`,
+        top: 'MACRO',
+        bottom: EMPTY,
+        long: `マクロ ${decoded.index}`,
+        tone: 'other',
+        accent: 'special',
+      };
     case 'user': {
       const custom = options.definition?.customKeycodes?.[decoded.index];
-      const short = (custom?.shortName ?? `U${decoded.index}`).replace(/\n/g, ' ');
+      const raw = custom?.shortName ?? `U${decoded.index}`;
+      const short = raw.replace(/\n/g, ' ');
+      const lines = raw.split('\n');
+      const center = lines[0] ?? short;
+      const bottom = lines.slice(1).join(' ');
       const long = custom?.name ?? `User${decoded.index}`;
-      return { short, long, tone: 'user' };
+      return {
+        short,
+        center,
+        top: EMPTY,
+        bottom,
+        long,
+        tone: 'user',
+        accent: 'none',
+      };
     }
     case 'raw':
       return {
         short: `?${decoded.code.toString(16)}`,
+        center: '?',
+        top: EMPTY,
+        bottom: `0x${decoded.code.toString(16)}`,
         long: `未対応 0x${decoded.code.toString(16).padStart(4, '0')}`,
         tone: 'other',
+        accent: 'none',
       };
   }
 }

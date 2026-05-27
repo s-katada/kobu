@@ -484,8 +484,8 @@ describe('InstallButton — auto-jump gate (negative cases)', () => {
     useConnectionStore.setState({ state: { kind: 'idle' } });
   });
 
-  it('peripheral target falls back to the physical-reset wizard even with a ready central', async () => {
-    const send = vi.fn();
+  it('peripheral target auto-jumps via the split-link relay when central is ready', async () => {
+    const send = vi.fn().mockResolvedValue(new Uint8Array(32));
     const transport = { sendAndReceive: send } as unknown as WebHidTransport;
     useConnectionStore.setState({
       state: {
@@ -510,15 +510,25 @@ describe('InstallButton — auto-jump gate (negative cases)', () => {
       },
     });
 
-    render(<InstallButton label="ペリフェラル" target="peripheral" asset={ASSET} />);
+    render(
+      <InstallButton label="ペリフェラル" target="peripheral" asset={ASSET} mountWaitMs={0} />,
+    );
     await userEvent.click(screen.getByRole('button', { name: /ペリフェラルをインストール/ }));
 
-    // Manual reset wizard, NOT auto-jump.
-    expect(screen.getByText(/RESET ボタンを素早く 2 回押す/)).toBeInTheDocument();
-    expect(send).not.toHaveBeenCalled();
+    // The split-link relay is triggered via Via CustomSetValue
+    // (channel 0xC0, id 0x12, value 1) — central's patched RMK turns
+    // that into a SplitMessage::PeripheralBootloaderJump.
+    await waitFor(() => {
+      expect(send).toHaveBeenCalled();
+    });
+    const packet = send.mock.calls[0]?.[0] as Uint8Array;
+    expect(packet[0]).toBe(0x07); // ViaCommand.CustomSetValue
+    expect(packet[1]).toBe(0xc0); // KOBU_CHANNEL
+    expect(packet[2]).toBe(0x12); // peripheral bootloader-jump id
+    expect(packet[3]).toBe(0x01);
   });
 
-  it('central target with no connection falls back to the physical-reset wizard', async () => {
+  it('central target with no connection falls back to the manual reset wizard (first-time install path)', async () => {
     useConnectionStore.setState({ state: { kind: 'idle' } });
 
     render(<InstallButton label="セントラル" target="central" asset={ASSET} />);

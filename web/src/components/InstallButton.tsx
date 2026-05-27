@@ -50,7 +50,7 @@ import {
   saveXiaoBootHandle,
 } from '../install/handleStore';
 import { fetchUf2, verifyXiaoBootDirectory } from '../install/install';
-import { enterBootloader } from '../protocol/device';
+import { enterBootloader, enterPeripheralBootloader } from '../protocol/device';
 import { useConnectionStore } from '../state/connection';
 import type { FirmwareAsset } from '../state/firmware';
 import type { WebHidTransport } from '../transport/webhid';
@@ -142,14 +142,30 @@ export function InstallButton({
 
   /**
    * Return the Vial transport if we can use it for an auto-jump on
-   * this install. Central + ready = yes; everything else = no
-   * (peripheral has no Vial endpoint; a non-ready central means we
-   * couldn't talk to it anyway).
+   * this install. Both `central` and `peripheral` targets can auto-jump
+   * via the central's HID connection — central uses the standard Vial
+   * `BootloaderJump`, peripheral uses kobu's custom split-link relay
+   * (`patch_rmk_peripheral_bootloader_jump`). A non-ready connection
+   * still falls back to the manual RESET wizard either way.
    */
   const autoJumpTransport = (): WebHidTransport | null => {
-    if (target !== 'central') return null;
     if (connection.kind !== 'ready') return null;
     return connection.transport;
+  };
+
+  /**
+   * Dispatch the bootloader-jump command appropriate for this install
+   * target. Central: standard Vial `BootloaderJump`, no reply expected.
+   * Peripheral: kobu `CustomSetValue(0xC0/0x12=1)` which the central
+   * firmware translates into a `SplitMessage::PeripheralBootloaderJump`
+   * over the BLE split link.
+   */
+  const jumpToBootloader = async (transport: WebHidTransport): Promise<void> => {
+    if (target === 'peripheral') {
+      await enterPeripheralBootloader(transport);
+    } else {
+      await enterBootloader(transport);
+    }
   };
 
   /**
@@ -180,6 +196,10 @@ export function InstallButton({
     }
     const firstStage: Stage = mode === 'clean' ? 'reset' : 'normal';
     const transport = autoJumpTransport();
+    // Vial connection ready: auto-jump (no RESET press required).
+    // Otherwise fall back to the manual double-tap-RESET wizard — this
+    // path is essential for the first-time install on a XIAO that
+    // hasn't booted kobu firmware yet (no Vial endpoint to talk to).
     if (transport) {
       void runAutoJumpFlow(firstStage, transport);
     } else {
@@ -193,7 +213,7 @@ export function InstallButton({
    */
   const runAutoJumpFlow = async (stage: Stage, transport: WebHidTransport) => {
     setPhase({ kind: 'jumping-to-bootloader', stage });
-    await enterBootloader(transport);
+    await jumpToBootloader(transport);
     setPhase({ kind: 'waiting-for-mount', stage });
     if (mountWaitMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, mountWaitMs));
@@ -333,7 +353,7 @@ export function InstallButton({
   if (!supported) {
     return (
       <div className="rounded-md border border-dashed border-zinc-300 dark:border-zinc-700 p-3 text-xs text-zinc-600 dark:text-zinc-300">
-        <p className="font-medium">{primaryLabel(label, mode)}</p>
+        <p className="font-medium">{primaryLabel(label, mode, target)}</p>
         <p className="mt-1">
           このブラウザはワンクリックインストールに対応していません。Chrome / Edge / Brave / Opera
           を使うか、左の「ダウンロード」リンクから手動で書き込んでください。
@@ -353,7 +373,7 @@ export function InstallButton({
             : 'w-full rounded-md bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 text-sm font-medium'
         }
       >
-        {primaryLabel(label, mode)}
+        {primaryLabel(label, mode, target)}
       </button>
     );
   }
@@ -367,7 +387,7 @@ export function InstallButton({
       }
     >
       <header className="flex items-baseline justify-between gap-2">
-        <h4 className="font-semibold">{primaryLabel(label, mode)}</h4>
+        <h4 className="font-semibold">{primaryLabel(label, mode, target)}</h4>
         <button
           type="button"
           onClick={close}
@@ -528,7 +548,15 @@ export function InstallButton({
   );
 }
 
-function primaryLabel(label: string, mode: InstallMode): string {
+function primaryLabel(label: string, mode: InstallMode, target?: InstallTarget): string {
+  // Central installs always include the flash-storage clear, so the
+  // dedicated "工場出荷状態に戻して再インストール" wording would just be
+  // duplicate noise on the only central button. Peripheral still
+  // surfaces both modes side-by-side so the extra wording is what
+  // distinguishes them.
+  if (target === 'central') {
+    return `${label}をインストール`;
+  }
   return mode === 'clean'
     ? `${label}を工場出荷状態に戻して再インストール`
     : `${label}をインストール`;

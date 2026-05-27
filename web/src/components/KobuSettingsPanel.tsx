@@ -13,11 +13,15 @@
  * resets just that category's values; a global reset lives in the
  * footer.
  *
- * **Heads-up**: the firmware-side handler is deferred (see #39's
- * "Deferred" section). Until it lands, slider drags update the
- * firmware's in-memory state (RMK 0.8 stub ACKs the write) but do
- * not persist across reboots. The panel surfaces a dismissible
- * banner explaining this.
+ * Writes go live via the build.rs RMK patches
+ * (`patch_rmk_via_custom_*`): a CustomSetValue lands directly in the
+ * `crate::input_device::battery::KOBU_*` atomics that
+ * `firmware/src/{trackball,status_led}.rs` consult on every event,
+ * so a slider drag is visible in pointer / LED behaviour immediately.
+ *
+ * Persistence across reboots is still deferred (issue #39): every
+ * boot reloads `KobuSettings::default()`. The dismissible banner at
+ * the top of the panel explains this.
  */
 
 import { useState } from 'react';
@@ -61,11 +65,13 @@ export function KobuSettingsPanel() {
       </header>
 
       {!bannerDismissed && (
-        <div className="px-4 py-2 border-b border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/40 flex items-start gap-3 text-xs">
+        <div className="px-4 py-2 border-b border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/40 flex items-start gap-3 text-xs">
           <div className="flex-1">
-            <p className="font-medium">⚠ 開発中の機能です</p>
+            <p className="font-medium">変更はすぐに反映されます</p>
             <p className="text-zinc-700 dark:text-zinc-300 mt-0.5">
-              firmware 側の Custom Vial ハンドラ (issue{' '}
+              スライダー / トグルを変更するとファームウェアにその場で送信され、トラックボール
+              とステータス LED に即時反映されます。ただし現在は再起動を跨いだ永続化は未対応で、 kobu
+              を再起動するとすべての値が既定値に戻ります（追跡:{' '}
               <a
                 href="https://github.com/s-katada/kobu/issues/39"
                 target="_blank"
@@ -74,7 +80,7 @@ export function KobuSettingsPanel() {
               >
                 #39
               </a>
-              ) が完成するまで、変更は再起動を跨いで保持されない場合があります。
+              ）。
             </p>
           </div>
           <button
@@ -273,6 +279,19 @@ const LABELS: Record<KobuSettingKey, SettingLabel> = {
   status_led_battery_low_threshold: {
     title: 'バッテリ赤しきい値',
     description: 'この値以下で LED が赤になります。',
+    unit: ' %',
+  },
+  // Read-only display values — surfaced in `KobuBatteryPanel` rather than
+  // this settings panel. Labels exist only because `LABELS` is keyed by
+  // the full `KobuSettingKey` union.
+  central_battery_percent: {
+    title: '左バッテリー',
+    description: 'central XIAO の LiPo 残量 (読み取り専用)。',
+    unit: ' %',
+  },
+  peripheral_battery_percent: {
+    title: '右バッテリー',
+    description: 'peripheral XIAO の LiPo 残量 (読み取り専用)。',
     unit: ' %',
   },
 };

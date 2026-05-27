@@ -48,13 +48,13 @@ describe('KobuSettingsPanel — render', () => {
     expect(screen.getAllByRole('checkbox')).toHaveLength(2);
   });
 
-  it('shows the firmware-deferred banner by default and dismisses it on click', async () => {
+  it('shows the live-updates banner by default and dismisses it on click', async () => {
     prime({});
     const user = userEvent.setup();
     render(<KobuSettingsPanel />);
-    expect(screen.getByText(/開発中の機能/)).toBeTruthy();
+    expect(screen.getByText(/変更はすぐに反映されます/)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: '非表示' }));
-    expect(screen.queryByText(/開発中の機能/)).toBeNull();
+    expect(screen.queryByText(/変更はすぐに反映されます/)).toBeNull();
   });
 });
 

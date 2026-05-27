@@ -1,9 +1,9 @@
 /**
  * Top-level editor view. Composed of:
  *   * `EditorToolbar`     — layer tabs, undo/redo, save
- *   * `KeymapView`        — 4×10 split SVG
+ *   * `KeymapView`        — split HTML keycap grid
+ *   * `KeycodeDock`       — persistent inline picker docked below
  *   * `BluetoothPanel`    — Layer 3 BLE side panel (only on layer 3)
- *   * `KeycodePicker`     — modal opened by clicking a key cell
  *   * `MacroEditor`       — macro buffer editor
  *   * `ComboEditor`       — combo entries editor
  *   * `MorseEditor`       — tap-dance / morse editor
@@ -12,9 +12,17 @@
  * Subscribes to the connection store so we know when to attach
  * (transitions to `ready`) and detach (transition out of `ready`).
  * The per-feature stores each own their slice of state from there on.
+ *
+ * Keyboard shortcuts (when no input is focused):
+ *   - 1..9         jump to that layer (EditorToolbar)
+ *   - Ctrl/Cmd+Z   undo / redo (EditorToolbar)
+ *   - ←↑→↓         move the selected cell within the active layer
+ *   - Backspace    clear the selected cell to KC_NO
+ *   - T            set the selected cell to Transparent
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { encodeNo, encodeTransparent } from '../protocol/keycodes';
 import { useComboStore } from '../state/combos';
 import { useConnectionStore } from '../state/connection';
 import { isCellDirty, useEditorStore } from '../state/editor';
@@ -24,8 +32,9 @@ import { useMorseStore } from '../state/morses';
 import { BluetoothPanel } from './BluetoothPanel';
 import { ComboEditor } from './ComboEditor';
 import { EditorToolbar } from './EditorToolbar';
-import { KeycodePicker } from './KeycodePicker';
+import { KeycodeDock } from './KeycodeDock';
 import { KeymapView } from './KeymapView';
+import { KobuBatteryPanel } from './KobuBatteryPanel';
 import { KobuSettingsPanel } from './KobuSettingsPanel';
 import { MacroEditor } from './MacroEditor';
 import { MorseEditor } from './MorseEditor';
@@ -82,12 +91,72 @@ export function Editor() {
   const selectCell = useEditorStore((s) => s.selectCell);
   const setActiveLayer = useEditorStore((s) => s.setActiveLayer);
   const applyKeyToSelection = useEditorStore((s) => s.applyKeyToSelection);
+  const setKey = useEditorStore((s) => s.setKey);
 
   // Subscribe to the whole state for the dirty predicate — re-renders
   // are cheap and the helper closes over the latest snapshot.
   const editorState = useEditorStore();
 
-  const [pickerOpen, setPickerOpen] = useState(false);
+  const [hoverCell, setHoverCell] = useState<{ row: number; col: number } | null>(null);
+
+  const currentSelected = selected;
+  const layerKeymap = local?.[activeLayer] ?? [];
+  const currentKeycode = currentSelected
+    ? (local?.[currentSelected.layer]?.[currentSelected.row]?.[currentSelected.col] ?? 0)
+    : 0;
+  const hoverKeycode = hoverCell ? (layerKeymap[hoverCell.row]?.[hoverCell.col] ?? 0) : null;
+
+  // Arrow-key navigation + Backspace/Delete/T shortcuts.
+  // The toolbar already owns 1..9 and ⌘/Ctrl+Z, so this hook only
+  // handles cell-relative operations and stays out of input fields.
+  const handleKey = useCallback(
+    (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        if (target.isContentEditable) return;
+      }
+      if (!dimensions) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      // Arrow keys: move the selection on the active layer's matrix.
+      if (
+        e.key === 'ArrowLeft' ||
+        e.key === 'ArrowRight' ||
+        e.key === 'ArrowUp' ||
+        e.key === 'ArrowDown'
+      ) {
+        if (!currentSelected) return;
+        const dRow = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+        const dCol = e.key === 'ArrowLeft' ? -1 : e.key === 'ArrowRight' ? 1 : 0;
+        const nextRow = Math.max(0, Math.min(dimensions.rows - 1, currentSelected.row + dRow));
+        const nextCol = Math.max(0, Math.min(dimensions.cols - 1, currentSelected.col + dCol));
+        if (nextRow !== currentSelected.row || nextCol !== currentSelected.col) {
+          e.preventDefault();
+          selectCell({ layer: currentSelected.layer, row: nextRow, col: nextCol });
+        }
+        return;
+      }
+
+      if (!currentSelected) return;
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault();
+        setKey(currentSelected, encodeNo());
+        return;
+      }
+      if (e.key === 't' || e.key === 'T') {
+        e.preventDefault();
+        setKey(currentSelected, encodeTransparent());
+      }
+    },
+    [currentSelected, dimensions, selectCell, setKey],
+  );
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [handleKey]);
 
   if (connection.kind !== 'ready') return null;
   if (phase.kind === 'loading' || phase.kind === 'empty') {
@@ -101,36 +170,72 @@ export function Editor() {
     ) : null;
   }
 
-  const layerKeymap = local[activeLayer] ?? [];
-  const currentSelected = selected;
-  const currentKeycode = currentSelected
-    ? (local[currentSelected.layer]?.[currentSelected.row]?.[currentSelected.col] ?? 0)
-    : 0;
-
   return (
-    <section className="space-y-4">
+    <section className="space-y-5">
       <EditorToolbar />
 
-      <div className="flex items-baseline justify-between">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="text-sm text-zinc-500 dark:text-zinc-400">
           レイヤー{' '}
           <span className="text-zinc-900 dark:text-zinc-100 font-medium">{activeLayer}</span>
           {' / '}全 {dimensions.layers} 層
         </h3>
-        <p className="text-xs text-zinc-500 dark:text-zinc-400">
-          キーをクリックして再割り当て。<kbd>1</kbd>..<kbd>{dimensions.layers}</kbd>{' '}
-          でレイヤー切替。
+        <p className="text-xs text-zinc-500 dark:text-zinc-400 flex flex-wrap items-center gap-x-2">
+          <span>
+            <kbd className="rounded border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-1 font-mono text-[10px]">
+              1
+            </kbd>
+            ..
+            <kbd className="rounded border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-1 font-mono text-[10px]">
+              {dimensions.layers}
+            </kbd>{' '}
+            でレイヤー切替
+          </span>
+          <span aria-hidden>·</span>
+          <span>
+            <kbd className="rounded border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-1 font-mono text-[10px]">
+              ←↑→↓
+            </kbd>{' '}
+            でセル移動
+          </span>
+          <span aria-hidden>·</span>
+          <span>
+            <kbd className="rounded border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-1 font-mono text-[10px]">
+              ⌫
+            </kbd>{' '}
+            で無効
+          </span>
+          <span aria-hidden>·</span>
+          <span>
+            <kbd className="rounded border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-1 font-mono text-[10px]">
+              T
+            </kbd>{' '}
+            で透過
+          </span>
         </p>
       </div>
 
-      <KeymapView
+      <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-gradient-to-b from-zinc-50 to-white dark:from-zinc-900 dark:to-zinc-950 shadow-sm p-4">
+        <KeymapView
+          definition={definition}
+          keymap={layerKeymap}
+          selected={currentSelected ? { row: currentSelected.row, col: currentSelected.col } : null}
+          isDirty={(row, col) => isCellDirty(editorState, { layer: activeLayer, row, col })}
+          onCellClick={(row, col) => {
+            selectCell({ layer: activeLayer, row, col });
+          }}
+          onCellHover={(cell) => setHoverCell(cell)}
+        />
+      </div>
+
+      <KeycodeDock
         definition={definition}
-        keymap={layerKeymap}
+        layerCount={dimensions.layers}
         selected={currentSelected ? { row: currentSelected.row, col: currentSelected.col } : null}
-        isDirty={(row, col) => isCellDirty(editorState, { layer: activeLayer, row, col })}
-        onCellClick={(row, col) => {
-          selectCell({ layer: activeLayer, row, col });
-          setPickerOpen(true);
+        current={currentKeycode}
+        hover={hoverKeycode}
+        onPick={(kc) => {
+          if (currentSelected) applyKeyToSelection(kc);
         }}
       />
 
@@ -145,24 +250,13 @@ export function Editor() {
         />
       )}
 
-      {pickerOpen && currentSelected && (
-        <KeycodePicker
-          definition={definition}
-          layerCount={dimensions.layers}
-          current={currentKeycode}
-          onPick={(kc) => {
-            applyKeyToSelection(kc);
-            setPickerOpen(false);
-          }}
-          onClose={() => setPickerOpen(false)}
-        />
-      )}
-
       <MacroEditor definition={definition} layerCount={dimensions.layers} />
 
       <ComboEditor definition={definition} layerCount={dimensions.layers} />
 
       <MorseEditor definition={definition} layerCount={dimensions.layers} />
+
+      <KobuBatteryPanel />
 
       <KobuSettingsPanel />
     </section>
