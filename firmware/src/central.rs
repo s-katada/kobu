@@ -12,7 +12,9 @@ use rmk::macros::rmk_central;
 mod keyboard_central {
     use crate::battery_source::{CentralBatteryTagger, KobuBatterySourceTap};
     use crate::status_led::StatusLedController;
-    use crate::trackball::{AxisRelabel, PointerProcessor, ScrollProcessor, run_pointer_flush};
+    use crate::trackball::{
+        AxisRelabel, PointerProcessor, ScrollProcessor, run_auto_mouse_layer, run_pointer_flush,
+    };
 
     // Status LED controller declared via the `rmk_macro` controller
     // attribute. The macro extracts the function body and emits
@@ -110,12 +112,19 @@ mod keyboard_central {
                 ::rmk::split::ble::central::scan_peripherals(&stack, &peripheral_addrs),
             ),
             ::rmk::embassy_futures::join::join(
-                status_led.polling_loop(),
-                // Drain the coalesced pointer accumulator to the host at
-                // the BLE report rate. Decouples the 2 kHz PMW3610 event
-                // rate from the slower wireless HID link so trackball
-                // motion is summed, not dropped. See src/trackball.rs.
-                run_pointer_flush(),
+                ::rmk::embassy_futures::join::join(
+                    status_led.polling_loop(),
+                    // Drain the coalesced pointer accumulator to the host at
+                    // the BLE report rate. Decouples the 2 kHz PMW3610 event
+                    // rate from the slower wireless HID link so trackball
+                    // motion is summed, not dropped. See src/trackball.rs.
+                    run_pointer_flush(),
+                ),
+                // Auto mouse layer: switch to layer 4 while the right-half
+                // trackball is moving, fall back after an idle window. Shares
+                // `keymap` with run_rmk/keyboard; borrows are single-statement
+                // and never held across an await. See src/trackball.rs.
+                run_auto_mouse_layer(&keymap),
             ),
         )
         .await;

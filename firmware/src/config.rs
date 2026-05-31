@@ -26,7 +26,7 @@ use core::sync::atomic::Ordering;
 
 use embassy_time::Duration;
 use rmk::input_device::battery::{
-    KOBU_SCROLL_INVERT_X, KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_THROTTLE_MS,
+    KOBU_LAST_KEY_TICKS, KOBU_SCROLL_INVERT_X, KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_THROTTLE_MS,
     KOBU_STATUS_LED_BAT_HIGH, KOBU_STATUS_LED_BAT_LOW, KOBU_STATUS_LED_PURPLE_HOLD_MS,
     KOBU_TRACKBALL_CPI,
 };
@@ -105,6 +105,15 @@ impl Default for KobuSettings {
 /// kobu-config via Via Custom Channel 0xC0 id 0x01.
 pub fn trackball_cpi() -> u16 {
     KOBU_TRACKBALL_CPI.load(ORD)
+}
+
+/// embassy-time tick (32768 Hz base) of the most recent key press, stamped by
+/// the patched RMK keyboard funnel. Read by `trackball.rs::run_auto_mouse_layer`
+/// for "require prior idle": auto-mouse activation is suppressed for a short
+/// window after any keypress, so typing vibration on the trackball cannot
+/// false-trigger the mouse layer. Returns 0 until the first key is pressed.
+pub fn last_key_ticks() -> u32 {
+    KOBU_LAST_KEY_TICKS.load(ORD)
 }
 
 pub fn scroll_throttle() -> Duration {

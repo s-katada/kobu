@@ -19,6 +19,9 @@ fn main() {
     patch_rmk_via_custom_save_kobu();
     patch_rmk_peripheral_bootloader_jump();
     patch_rmk_macro_adc_acquisition_time();
+    patch_rmk_keymap_layer_pub();
+    patch_rmk_last_key_tick_atomic();
+    patch_rmk_record_last_key_tick();
 
     generate_vial_config();
 
@@ -1105,4 +1108,170 @@ fn patch_rmk_peripheral_bootloader_jump() {
             "cargo:warning=kobu: peripheral bootloader jump relay patch — no files modified (already applied or rmk-{RMK_VERSION} not found)"
         );
     }
+}
+
+/// Expose `KeyMap::activate_layer` / `KeyMap::deactivate_layer` as `pub` so the
+/// kobu firmware crate can drive them from `src/trackball.rs::run_auto_mouse_layer`.
+///
+/// RMK 0.8.2 declares both as `pub(crate)` (rmk-0.8.2/src/keymap.rs:363 and
+/// :376), which is unreachable from the kobu crate. The kobu auto-mouse-layer
+/// feature (BUG2) needs to activate the mouse layer (layer 4) when the
+/// peripheral trackball moves and deactivate it after an inactivity timeout —
+/// exactly what these two methods do (they also run `update_tri_layer`, so the
+/// controller / split layer bookkeeping stays identical to a built-in LayerOn).
+///
+/// Widening visibility is the minimal change: no behavior is altered, the
+/// methods are simply callable from outside the crate. Marker-idempotent;
+/// panics if the upstream signatures drift so the breakage is loud.
+fn patch_rmk_keymap_layer_pub() {
+    const MARKER: &str = "// kobu: activate_layer/deactivate_layer made pub applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keymap.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keymap.rs; \
+             activate_layer/deactivate_layer pub patch was not applied"
+        );
+        return;
+    };
+
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let replacements = [
+        (
+            "    pub(crate) fn activate_layer(&mut self, layer_num: u8) {",
+            "    pub fn activate_layer(&mut self, layer_num: u8) {",
+        ),
+        (
+            "    pub(crate) fn deactivate_layer(&mut self, layer_num: u8) {",
+            "    pub fn deactivate_layer(&mut self, layer_num: u8) {",
+        ),
+    ];
+
+    for (from, to) in replacements {
+        if !contents.contains(from) {
+            panic!(
+                "kobu: expected rmk-{RMK_VERSION} keymap.rs signature `{from}` missing in {}; \
+                 upstream may have changed — update firmware/build.rs::patch_rmk_keymap_layer_pub",
+                path.display()
+            );
+        }
+        contents = contents.replace(from, to);
+    }
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Inject `pub static KOBU_LAST_KEY_TICKS: AtomicU32` into rmk's
+/// `input_device/battery.rs`, co-located with the other kobu atomics. It holds
+/// the embassy-time tick of the most recent key PRESS (written by
+/// `patch_rmk_record_last_key_tick`), which `run_auto_mouse_layer` reads to
+/// implement "require prior idle" — typing vibration jostles the right
+/// trackball and was false-triggering the auto mouse layer, so we suppress
+/// auto-mouse activation for a short window after any keypress.
+fn patch_rmk_last_key_tick_atomic() {
+    const MARKER: &str = "// kobu: last-key-tick atomic for auto-mouse prior-idle applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/input_device/battery.rs") else {
+        return;
+    };
+
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    // Anchor on the last settings atomic injected by
+    // `patch_rmk_kobu_settings_atomics` (which runs earlier), and append after it.
+    let anchor = "pub static KOBU_STATUS_LED_BAT_LOW: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(20);";
+    if !contents.contains(anchor) {
+        panic!(
+            "kobu: expected KOBU_STATUS_LED_BAT_LOW anchor in rmk-{RMK_VERSION} input_device/battery.rs at {}; \
+             patch_rmk_kobu_settings_atomics must run first — check order in build.rs::main",
+            path.display()
+        );
+    }
+    let injected = "pub static KOBU_STATUS_LED_BAT_LOW: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(20);\n\n// kobu: embassy-time tick (32768 Hz) of the most recent key press. Written by\n// the keyboard processing funnel (see patch_rmk_record_last_key_tick); read by\n// firmware/src/trackball.rs::run_auto_mouse_layer for require-prior-idle so\n// typing vibration on the trackball does not false-trigger the mouse layer.\npub static KOBU_LAST_KEY_TICKS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);";
+    contents = contents.replace(anchor, injected);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Record the embassy-time tick of every key PRESS into `KOBU_LAST_KEY_TICKS`,
+/// inside rmk's `Keyboard::process_inner` (the single funnel for all key
+/// events). Used for the auto-mouse-layer require-prior-idle gate. `Instant` is
+/// already imported in keyboard.rs.
+fn patch_rmk_record_last_key_tick() {
+    const MARKER: &str = "// kobu: record last-key-tick in process_inner applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard.rs") else {
+        return;
+    };
+
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"        // Matrix should process key pressed event first, record the timestamp of key changes
+        if event.pressed {
+            self.set_timer_value(event, Some(Instant::now()));
+        }"#;
+    let to = r#"        // Matrix should process key pressed event first, record the timestamp of key changes
+        if event.pressed {
+            self.set_timer_value(event, Some(Instant::now()));
+            // kobu: stamp the last key-press tick for the auto-mouse-layer
+            // require-prior-idle gate (firmware/src/trackball.rs).
+            crate::input_device::battery::KOBU_LAST_KEY_TICKS
+                .store(Instant::now().as_ticks() as u32, core::sync::atomic::Ordering::Relaxed);
+        }"#;
+
+    if !contents.contains(from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} keyboard.rs process_inner pressed-timestamp block missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_record_last_key_tick",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
 }

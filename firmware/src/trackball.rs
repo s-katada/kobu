@@ -27,7 +27,7 @@ use core::sync::atomic::{AtomicI32, Ordering};
 
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
-use embassy_time::{Instant, Timer};
+use embassy_time::{Duration, Instant, Timer, with_timeout};
 use rmk::channel::KEYBOARD_REPORT_CHANNEL;
 use rmk::event::{Axis, Event};
 use rmk::hid::Report;
@@ -43,6 +43,103 @@ use crate::config;
 /// a short hold window, so the user sees the central LED light up while
 /// the right-hand trackball is being moved.
 pub static PERIPHERAL_ACTIVITY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+// ─── Auto mouse layer ───────────────────────────────────────────────
+//
+// kobu's keymap reserves layer 4 as the mouse layer (MouseBtn1/2/3 etc.), but
+// no key in keyboard.toml ever activates it — so before this it was completely
+// unreachable. ZMK-style "auto mouse layer": moving the pointer (the RIGHT /
+// peripheral trackball) temporarily switches to the mouse layer so the mouse
+// buttons are at your fingertips, and it falls back to the previous layer after
+// a short idle window.
+//
+// [`PointerProcessor`] pulses [`AUTO_MOUSE_ACTIVITY`] on every real (non-zero)
+// pointer motion. [`run_auto_mouse_layer`] (spawned from `src/central.rs`)
+// activates [`AUTO_MOUSE_LAYER`] on the first motion and deactivates it once no
+// motion has arrived for [`AUTO_MOUSE_TIMEOUT`]. Scroll (the LEFT ball) does
+// NOT trigger it — you scroll on the base layer while typing, so hijacking the
+// layer on scroll would be surprising.
+
+/// Pulsed on each non-zero peripheral pointer-motion event. Latching `Signal`,
+/// so a pulse raised while [`run_auto_mouse_layer`] is mid-iteration is
+/// remembered and the next `wait()` returns immediately — no motion edge is
+/// lost and a fast flurry of samples collapses to "still moving".
+static AUTO_MOUSE_ACTIVITY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
+/// Layer activated while the pointer is moving. Matches keyboard.toml layer 4
+/// (the mouse layer). `NUM_LAYER` is 7, so this is always in range; if it ever
+/// isn't, `activate_layer` warns and no-ops rather than panicking.
+const AUTO_MOUSE_LAYER: u8 = 4;
+
+/// How long the mouse layer stays active after the last pointer motion. 700 ms
+/// keeps it up while you pause to aim a click but releases it soon after you
+/// stop mousing, so typing right afterwards lands on the normal layers. Tune by
+/// feel (≈400–1000 ms is reasonable).
+const AUTO_MOUSE_TIMEOUT: Duration = Duration::from_millis(700);
+
+/// Require-prior-idle window. Typing makes the (sensitive) right trackball emit
+/// tiny motion events that were false-triggering the mouse layer. We suppress
+/// auto-mouse *activation* for this long after any key press (ZMK's
+/// "require-prior-idle" idea). This only gates the INITIAL activation — once the
+/// mouse layer is up, continued ball motion keeps it up regardless (see the
+/// timeout branch), so clicking the layer-4 mouse buttons never drops it.
+const AUTO_MOUSE_PRIOR_IDLE: Duration = Duration::from_millis(200);
+
+/// Drive the auto mouse layer from pointer activity.
+///
+/// Spawned alongside the processor chain on the central (see `src/central.rs`).
+/// Shares the one `KeyMap` `RefCell` with `run_rmk` / `keyboard.run()`; it only
+/// ever borrows it for a single, non-`await` statement (`activate_layer` /
+/// `deactivate_layer` are synchronous and run the same `update_tri_layer`
+/// bookkeeping as a built-in `LayerOn`), so it can never hold a borrow across an
+/// await and clash with key resolution on the single-threaded executor.
+///
+/// `activate_layer` / `deactivate_layer` are called only on the off→on and
+/// on→off transitions (tracked by `active`), never on every motion sample, so
+/// the layer-change controller event hits the split link at most twice per
+/// mousing burst instead of per-event.
+pub async fn run_auto_mouse_layer<
+    const ROW: usize,
+    const COL: usize,
+    const NUM_LAYER: usize,
+    const NUM_ENCODER: usize,
+>(
+    keymap: &RefCell<KeyMap<'_, ROW, COL, NUM_LAYER, NUM_ENCODER>>,
+) {
+    let mut active = false;
+    loop {
+        if !active {
+            // Idle: park until the first pointer motion.
+            AUTO_MOUSE_ACTIVITY.wait().await;
+            // Require-prior-idle: ignore motion that arrives within
+            // AUTO_MOUSE_PRIOR_IDLE of the last key press — that "motion" is
+            // almost always typing vibration jostling the ball, not an
+            // intentional cursor move. Re-loops (re-waits) instead of
+            // activating, so a genuine move after a typing pause still works.
+            // 32-bit tick math: KOBU_LAST_KEY_TICKS is the low 32 bits of the
+            // 32768 Hz tick counter (Cortex-M4 has no AtomicU64). wrapping_sub
+            // is exact for any real elapsed time well under the ~36 h u32 wrap.
+            let now_ticks = Instant::now().as_ticks() as u32;
+            let idle = Duration::from_ticks(now_ticks.wrapping_sub(config::last_key_ticks()) as u64);
+            if idle < AUTO_MOUSE_PRIOR_IDLE {
+                continue;
+            }
+            keymap.borrow_mut().activate_layer(AUTO_MOUSE_LAYER);
+            active = true;
+        } else {
+            // Active: stay on while motion keeps arriving within the window;
+            // the first quiet window deactivates and returns to idle.
+            match with_timeout(AUTO_MOUSE_TIMEOUT, AUTO_MOUSE_ACTIVITY.wait()).await {
+                Ok(()) => {} // more motion — keep the layer, re-arm the window
+                Err(_) => {
+                    keymap.borrow_mut().deactivate_layer(AUTO_MOUSE_LAYER);
+                    active = false;
+                }
+            }
+        }
+    }
+}
+
 
 // ─── Pointer delta accumulator ──────────────────────────────────────
 //
@@ -360,6 +457,11 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                 // any pending value, which is fine — we only need the
                 // "something happened" edge, not a count.
                 PERIPHERAL_ACTIVITY.signal(());
+                // Arm / refresh the auto mouse layer, but only on real motion
+                // so idle polling can't trap the user on the mouse layer.
+                if x != 0 || y != 0 {
+                    AUTO_MOUSE_ACTIVITY.signal(());
+                }
                 ProcessResult::Stop
             }
             _ => ProcessResult::Continue(event),
