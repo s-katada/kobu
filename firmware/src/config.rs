@@ -24,11 +24,12 @@
 
 use core::sync::atomic::Ordering;
 
+use embassy_nrf::pac;
 use embassy_time::Duration;
 use rmk::input_device::battery::{
-    KOBU_LAST_KEY_TICKS, KOBU_SCROLL_INVERT_X, KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_THROTTLE_MS,
-    KOBU_STATUS_LED_BAT_HIGH, KOBU_STATUS_LED_BAT_LOW, KOBU_STATUS_LED_PURPLE_HOLD_MS,
-    KOBU_TRACKBALL_CPI,
+    KOBU_HOST_CONNECTED, KOBU_LAST_KEY_TICKS, KOBU_MOUSE_BUTTONS, KOBU_SCROLL_INVERT_X,
+    KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_THROTTLE_MS, KOBU_STATUS_LED_BAT_HIGH, KOBU_STATUS_LED_BAT_LOW,
+    KOBU_STATUS_LED_PURPLE_HOLD_MS, KOBU_TRACKBALL_CPI,
 };
 
 /// Ordering used for all reads / writes here. `Relaxed` is correct
@@ -116,6 +117,32 @@ pub fn last_key_ticks() -> u32 {
     KOBU_LAST_KEY_TICKS.load(ORD)
 }
 
+/// True once the HOST (Mac) BLE link is encrypted, false on disconnect. Set
+/// from the patched `gatt_events_task` (see `build.rs::patch_rmk_set_host_connected`).
+/// Read by `trackball.rs::run_auto_mouse_layer` to keep the auto-mouse layer —
+/// the only trackball-driven emitter of a layer-change split write — OFF during
+/// the host connect+encryption bring-up window.
+pub fn host_connected() -> bool {
+    KOBU_HOST_CONNECTED.load(ORD)
+}
+
+/// True when the nRF52840 POWER peripheral reports VBUS present (USB cable
+/// supplying power). Used by `trackball.rs::run_input_gate_central` as the
+/// USB-side "host ready" condition so the input gate (boot-trackball wedge fix)
+/// opens at boot on USB instead of waiting for a BLE encryption that never
+/// happens. Mirrors `status_led.rs::vbus_present`.
+pub fn vbus_present() -> bool {
+    pac::POWER.usbregstatus().read().vbusdetect()
+}
+
+/// Live HID mouse-button bitfield, mirrored from rmk's `send_mouse_report`
+/// (see `build.rs::patch_rmk_capture_mouse_buttons`). OR'd into the trackball
+/// motion/scroll reports so moving the ball while a button is held does not
+/// send `buttons: 0` and release a drag/selection.
+pub fn mouse_buttons() -> u8 {
+    KOBU_MOUSE_BUTTONS.load(ORD)
+}
+
 pub fn scroll_throttle() -> Duration {
     Duration::from_millis(KOBU_SCROLL_THROTTLE_MS.load(ORD) as u64)
 }
@@ -124,10 +151,21 @@ pub fn scroll_invert_x() -> bool {
     KOBU_SCROLL_INVERT_X.load(ORD)
 }
 
+// Retained for API symmetry and the kobu-config wire schema (Via Custom
+// Channel 0xC0 id 0x04 / web SPA still read & write KOBU_SCROLL_INVERT_Y).
+// The scroll path itself no longer uses the vertical axis — ScrollProcessor
+// drives the wheel from the horizontal roll only — so this helper currently
+// has no firmware-side reader.
+#[allow(dead_code)]
 pub fn scroll_invert_y() -> bool {
     KOBU_SCROLL_INVERT_Y.load(ORD)
 }
 
+// Retained for the kobu-config wire schema (Via Custom Channel 0xC0 id 0x05 /
+// web SPA still read & write KOBU_STATUS_LED_PURPLE_HOLD_MS). The status LED is
+// now driven by layer state (see src/status_led.rs), not a peripheral-activity
+// purple hold, so this helper currently has no firmware-side reader.
+#[allow(dead_code)]
 pub fn status_led_purple_hold() -> Duration {
     Duration::from_millis(KOBU_STATUS_LED_PURPLE_HOLD_MS.load(ORD) as u64)
 }

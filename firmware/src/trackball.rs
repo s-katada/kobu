@@ -66,6 +66,14 @@ pub static PERIPHERAL_ACTIVITY: Signal<CriticalSectionRawMutex, ()> = Signal::ne
 /// lost and a fast flurry of samples collapses to "still moving".
 static AUTO_MOUSE_ACTIVITY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// Gross pointer travel (Σ|dx|+|dy| in raw 800-CPI counts) banked by
+/// [`PointerProcessor`] since the last time [`run_auto_mouse_layer`] inspected
+/// it. Separate from `POINTER_ACCUM_*` (which `run_pointer_flush` zeroes on its
+/// own cadence) so the activation gate can read travel without racing the flush.
+/// A typing wobble is small and decays between bursts so it never reaches the
+/// threshold; one deliberate flick blows past it.
+static AUTO_MOUSE_TRAVEL: AtomicI32 = AtomicI32::new(0);
+
 /// Layer activated while the pointer is moving. Matches keyboard.toml layer 4
 /// (the mouse layer). `NUM_LAYER` is 7, so this is always in range; if it ever
 /// isn't, `activate_layer` warns and no-ops rather than panicking.
@@ -77,13 +85,30 @@ const AUTO_MOUSE_LAYER: u8 = 4;
 /// feel (≈400–1000 ms is reasonable).
 const AUTO_MOUSE_TIMEOUT: Duration = Duration::from_millis(700);
 
-/// Require-prior-idle window. Typing makes the (sensitive) right trackball emit
-/// tiny motion events that were false-triggering the mouse layer. We suppress
-/// auto-mouse *activation* for this long after any key press (ZMK's
-/// "require-prior-idle" idea). This only gates the INITIAL activation — once the
-/// mouse layer is up, continued ball motion keeps it up regardless (see the
-/// timeout branch), so clicking the layer-4 mouse buttons never drops it.
-const AUTO_MOUSE_PRIOR_IDLE: Duration = Duration::from_millis(200);
+/// Require-prior-idle window (first line of defence against typing false-
+/// triggers). Suppress auto-mouse *activation* for this long after any key
+/// press (ZMK's "require-prior-idle" idea). Bumped 200 → 300 ms: at 200 ms the
+/// *tail* of a hard-keystroke trackball wobble (which keeps emitting samples)
+/// slipped through. Only gates INITIAL activation — once the mouse layer is up,
+/// AUTO_MOUSE_TIMEOUT keeps it regardless of key timing, so clicking the
+/// layer-4 mouse buttons never drops it.
+const AUTO_MOUSE_PRIOR_IDLE: Duration = Duration::from_millis(300);
+
+/// Travel gate (the real fix, second/independent line of defence). Even after
+/// the prior-idle window passes, do NOT activate until gross pointer travel
+/// (Σ|dx|+|dy| in raw 800-CPI counts) exceeds this within one un-paused motion
+/// burst. At 800 CPI, 80 counts ≈ 2.5 mm of ball travel — a short deliberate
+/// flick clears it within a few ms (the PMW3610 polls at ~2 kHz); a hard-
+/// keystroke wobble is a brief sub-mm oscillation that decays before it can sum
+/// to 80, so it never activates. Lower = twitchier; 60–120 is the sane range.
+const AUTO_MOUSE_TRAVEL_THRESHOLD: i32 = 80;
+
+/// Travel-accumulator decay window. If no motion sample arrives for this long,
+/// the banked travel is forgotten before the next gate check, so a tiny wobble
+/// now and another 150 ms later never *sum* across the quiet gap into a false
+/// activation. Short enough that two distinct wobbles don't chain, long enough
+/// that the sub-ms sample gaps inside one genuine 2 kHz move never reset it.
+const AUTO_MOUSE_TRAVEL_DECAY: Duration = Duration::from_millis(60);
 
 /// Drive the auto mouse layer from pointer activity.
 ///
@@ -106,40 +131,115 @@ pub async fn run_auto_mouse_layer<
 >(
     keymap: &RefCell<KeyMap<'_, ROW, COL, NUM_LAYER, NUM_ENCODER>>,
 ) {
+    // Round 7: keep auto-mouse OUT of the host BLE bring-up window. The user
+    // hit a hard wedge where rolling the trackball *first* at power-on killed
+    // the whole keyboard (pressing a key first avoided it). The auto-mouse task
+    // is the only trackball-triggered actor that mutates the keymap and emits a
+    // layer-change split write during bring-up; if that write lands inside the
+    // Mac connect+encryption window it can contend for the single radio / the
+    // shared split-link TX queue and stall the handshake. The split write is now
+    // also timeout-bounded in rmk (build.rs::patch_rmk_timeout_split_writes), so
+    // this gate is defence in depth — but gating on the REAL host-connected
+    // state (set on encryption in the patched gatt task,
+    // build.rs::patch_rmk_set_host_connected) is strictly better than round 4's
+    // fixed 3 s, which could expire *inside* a slow Mac connect. Generous
+    // fallback so a host-less bring-up (USB-only bench testing, or a host that
+    // never reads GATT) still arms auto-mouse eventually.
+    {
+        let mut waited_ms = 0u64;
+        while !config::host_connected() && waited_ms < 12_000 {
+            Timer::after_millis(100).await;
+            waited_ms += 100;
+        }
+        // Small settle after the link is up before arming.
+        Timer::after_millis(300).await;
+        defmt::info!(
+            "kobu: auto-mouse armed (host_connected={})",
+            config::host_connected()
+        );
+    }
+    // Discard motion banked during the delay so the first armed pulse starts a
+    // clean burst.
+    AUTO_MOUSE_TRAVEL.store(0, Ordering::Relaxed);
+    AUTO_MOUSE_ACTIVITY.reset();
+
     let mut active = false;
+    // Low-32-bit (32768 Hz) tick of the last motion sample counted toward the
+    // travel gate. `None` while idle. Used to decay the travel accumulator
+    // across quiet gaps so two unrelated wobbles can't sum into a false trigger.
+    let mut last_motion: Option<u32> = None;
     loop {
         if !active {
-            // Idle: park until the first pointer motion.
+            // Idle: park until the next pointer-motion pulse.
             AUTO_MOUSE_ACTIVITY.wait().await;
-            // Require-prior-idle: ignore motion that arrives within
-            // AUTO_MOUSE_PRIOR_IDLE of the last key press — that "motion" is
-            // almost always typing vibration jostling the ball, not an
-            // intentional cursor move. Re-loops (re-waits) instead of
-            // activating, so a genuine move after a typing pause still works.
-            // 32-bit tick math: KOBU_LAST_KEY_TICKS is the low 32 bits of the
-            // 32768 Hz tick counter (Cortex-M4 has no AtomicU64). wrapping_sub
-            // is exact for any real elapsed time well under the ~36 h u32 wrap.
+            // 32-bit tick math (KOBU_LAST_KEY_TICKS and Instant share the low-32
+            // 32768 Hz tick; Cortex-M4 has no AtomicU64). wrapping_sub is exact
+            // for any real elapsed time well under the ~36 h u32 wrap.
             let now_ticks = Instant::now().as_ticks() as u32;
+
+            // Decay gate: if motion paused longer than the decay window, this
+            // pulse starts a *fresh* burst — drop travel banked by an earlier,
+            // now-stale burst (e.g. a wobble) before judging this one.
+            if let Some(prev) = last_motion {
+                if Duration::from_ticks(now_ticks.wrapping_sub(prev) as u64) >= AUTO_MOUSE_TRAVEL_DECAY {
+                    AUTO_MOUSE_TRAVEL.store(0, Ordering::Relaxed);
+                }
+            }
+            last_motion = Some(now_ticks);
+
+            // Require-prior-idle: ignore motion within AUTO_MOUSE_PRIOR_IDLE of
+            // the last key press — almost always typing vibration jostling the
+            // ball. Re-loop instead of activating; a genuine move after a typing
+            // pause still works. Reset the travel bank too so wobble counts from
+            // the suppressed window don't carry into the post-window check.
             let idle = Duration::from_ticks(now_ticks.wrapping_sub(config::last_key_ticks()) as u64);
             if idle < AUTO_MOUSE_PRIOR_IDLE {
+                AUTO_MOUSE_TRAVEL.store(0, Ordering::Relaxed);
                 continue;
             }
-            keymap.borrow_mut().activate_layer(AUTO_MOUSE_LAYER);
-            active = true;
+
+            // Travel gate (the real fix): only activate once accumulated gross
+            // travel since the burst started clears the threshold. A brief,
+            // small, oscillating typing wobble never reaches it; one short
+            // deliberate move blows past it within a few ms. DON'T zero on a
+            // miss — a genuine move banks travel across several sub-ms samples
+            // and must be allowed to *sum* up (the decay branch above discards a
+            // *stale* burst).
+            if AUTO_MOUSE_TRAVEL.load(Ordering::Relaxed) < AUTO_MOUSE_TRAVEL_THRESHOLD {
+                continue;
+            }
+
+            // try_borrow_mut (not borrow_mut) defensively: on this single-thread
+            // executor no other task holds a keymap borrow across an await, so
+            // this should always succeed — but if it's ever busy we skip and the
+            // latching AUTO_MOUSE_ACTIVITY signal retries on the next pulse,
+            // rather than risking a RefCell panic.
+            if let Ok(mut km) = keymap.try_borrow_mut() {
+                km.activate_layer(AUTO_MOUSE_LAYER);
+                active = true;
+                AUTO_MOUSE_TRAVEL.store(0, Ordering::Relaxed);
+                last_motion = None;
+            }
         } else {
-            // Active: stay on while motion keeps arriving within the window;
-            // the first quiet window deactivates and returns to idle.
+            // Active: stay on while motion keeps arriving within the window; the
+            // first quiet window deactivates and returns to idle. The travel
+            // gate is intentionally NOT re-checked here — once mousing, any
+            // motion (even a small aim nudge) should hold the layer so the
+            // layer-4 mouse buttons stay reachable.
             match with_timeout(AUTO_MOUSE_TIMEOUT, AUTO_MOUSE_ACTIVITY.wait()).await {
                 Ok(()) => {} // more motion — keep the layer, re-arm the window
                 Err(_) => {
-                    keymap.borrow_mut().deactivate_layer(AUTO_MOUSE_LAYER);
-                    active = false;
+                    if let Ok(mut km) = keymap.try_borrow_mut() {
+                        km.deactivate_layer(AUTO_MOUSE_LAYER);
+                        active = false;
+                        AUTO_MOUSE_TRAVEL.store(0, Ordering::Relaxed);
+                    }
+                    // If busy, stay active and retry deactivate next timeout.
                 }
             }
         }
     }
 }
-
 
 // ─── Pointer delta accumulator ──────────────────────────────────────
 //
@@ -173,6 +273,36 @@ static POINTER_PENDING: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
 /// Multiplier base for `config::trackball_cpi()`: 1000 = 1.0×.
 const CPI_DENOM: i32 = 1000;
+
+/// Scroll sensitivity divisor: raw PMW3610 counts (at 800 CPI) per emitted
+/// wheel tick. Higher = slower / less sensitive scrolling. One HID wheel unit
+/// = one scroll detent/line on the host (macOS then layers its own scroll
+/// acceleration on top), so this is "raw counts per scrolled line".
+///
+/// Was 8, which scrolled "どえらい行数" (a tiny roll jumped a huge number of
+/// lines). Two compounding causes:
+///   1. Round 7 slowed the PMW3610 poll 500 µs → 2 ms (2 kHz → 500 Hz). The
+///      sensor accumulates dx between polls, so each *sample* now carries ~4×
+///      more counts than when STEP=8 was tuned — i.e. STEP=8 produced ~4× more
+///      wheel units per physical roll after the poll change.
+///   2. On top of that the user wants it ~3–4× less sensitive than it already
+///      felt.
+/// 30 ≈ 8 × ~3.75: it both undoes the 4× poll regression and lands close to a
+/// 3.75× reduction versus the (already-too-fast) current feel. At 800 CPI =
+/// 31.5 counts/mm, 30 counts ≈ ~1 mm of ball travel per scrolled line, which
+/// reads as a calm, deliberate scroll. `ScrollProcessor` carries the remainder,
+/// so a slow roll (per-sample |dx| < STEP) still accumulates to a tick instead
+/// of rounding to zero. Tune 24–40 by feel; must be ≥ 1. (Could be wired to a
+/// Vial Custom-channel field later; a fixed default is enough for now.)
+const SCROLL_STEP: i32 = 30;
+
+/// Hard ceiling on wheel units emitted in a single event. At 500 Hz a hard
+/// ball spin can pack ~90+ raw counts into one 2 ms sample; without this a
+/// single sample could dump several line-ticks at once, reintroducing the
+/// chunky "huge jump" feel even with a large SCROLL_STEP. Capping per-event
+/// units to a small number keeps fast spins smooth (many small reports) rather
+/// than lumpy. Must be ≥ 1.
+const SCROLL_MAX_UNITS: i32 = 3;
 
 /// Ceiling on "owed" (accumulated-but-unsent) travel, in milli-counts.
 ///
@@ -231,7 +361,10 @@ pub async fn run_pointer_flush() {
                 break;
             }
             let report = MouseReport {
-                buttons: 0,
+                // Carry the live held-button state (drag/copy fix): a bare
+                // buttons:0 here would release a button the user is holding
+                // while dragging. See config::mouse_buttons / build.rs.
+                buttons: config::mouse_buttons(),
                 x: dx as i8,
                 y: dy as i8,
                 wheel: 0,
@@ -317,6 +450,11 @@ pub struct ScrollProcessor<
     /// dropped (NOT accumulated — for the trackball use case "skip
     /// some" feels better than "send a giant burst later").
     next_emit_at: Option<Instant>,
+    /// Fractional scroll accumulator, in raw PMW3610 counts. One wheel unit
+    /// is emitted per `SCROLL_STEP` accumulated counts; the remainder carries
+    /// to the next event so slow rolls (per-sample |dx| < STEP) still add up
+    /// to a tick instead of being lost to integer truncation.
+    scroll_acc: i32,
 }
 
 impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCODER: usize>
@@ -326,6 +464,7 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
         Self {
             keymap,
             next_emit_at: None,
+            scroll_acc: 0,
         }
     }
 }
@@ -357,11 +496,45 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                     return ProcessResult::Continue(event);
                 }
 
-                // Throttle: drop reports that arrive faster than the
-                // configured interval allows. The trackball's native
-                // rate can be too fast for some applications, and
-                // dropping intermediate samples feels better than
-                // accumulating them into one big late wheel jump.
+                // Direction first (preserve the corrected mapping +
+                // scroll_invert_x escape hatch). The vertical (V/dy) axis is
+                // intentionally unused: scroll is driven by the LEFT ball's
+                // HORIZONTAL roll only — roll RIGHT (+dx -> +wheel) = scroll
+                // UP, roll LEFT = scroll DOWN (HID wheel: positive = up). If
+                // this module reports a rightward roll as -dx, set
+                // scroll_invert_x=true (Via 0xC0 / web editor) to flip with no
+                // reflash.
+                let _ = vertical; // V axis is claimed but unused for the wheel
+                let h = if config::scroll_invert_x() { -horizontal } else { horizontal };
+
+                // Magnitude reduction: the PMW3610 emits a large per-sample dx
+                // at 800 CPI, so emitting raw dx as wheel ticks scrolled far
+                // too fast. Bank raw counts and emit one wheel unit per
+                // SCROLL_STEP counts, carrying the remainder so slow rolls
+                // (|dx| < STEP per sample) still add up to a tick instead of
+                // rounding to zero.
+                self.scroll_acc += h as i32;
+                // Bound the bank so a busy-channel catch-up (units kept on a
+                // dropped send, see below) plus one large 500 Hz sample can't
+                // become a giant wheel jump. Sized to SCROLL_MAX_UNITS ticks'
+                // worth of counts so the bank can never hold more than we are
+                // willing to emit in one go.
+                self.scroll_acc = self
+                    .scroll_acc
+                    .clamp(-SCROLL_MAX_UNITS * SCROLL_STEP, SCROLL_MAX_UNITS * SCROLL_STEP);
+                // truncates toward 0, then hard-cap per-event ticks so a single
+                // fast-spin sample (which at 500 Hz can carry ~90+ counts)
+                // emits a smooth small step instead of one chunky jump.
+                let units = (self.scroll_acc / SCROLL_STEP).clamp(-SCROLL_MAX_UNITS, SCROLL_MAX_UNITS);
+                if units == 0 {
+                    return ProcessResult::Stop;
+                }
+
+                // Throttle: once a unit is ready, drop it if still inside the
+                // configured interval. Counts stay banked in scroll_acc (only
+                // consumed below, after the gate passes), so a throttled tick
+                // is deferred, not lost. Default throttle is 0 ms, so this
+                // gate is normally inert.
                 let throttle = config::scroll_throttle();
                 let now = Instant::now();
                 if let Some(when) = self.next_emit_at {
@@ -369,21 +542,41 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                         return ProcessResult::Stop;
                     }
                 }
-                self.next_emit_at = Some(now + throttle);
-
-                // Apply per-axis invert before the H+V sum, so the
-                // user-facing semantics ("invert vertical scroll")
-                // stay intuitive regardless of the H+V mixing rule.
-                let h = if config::scroll_invert_x() { -horizontal } else { horizontal };
-                let v = if config::scroll_invert_y() { -vertical } else { vertical };
                 let report = MouseReport {
-                    buttons: 0,
+                    // Carry the live held-button state (drag/copy fix) — see
+                    // run_pointer_flush. Lets you hold a button and scroll
+                    // without the wheel report releasing it.
+                    buttons: config::mouse_buttons(),
                     x: 0,
                     y: 0,
-                    wheel: clamp_i8(-(h + v)),
+                    wheel: clamp_i8(units as i16),
                     pan: 0,
                 };
-                self.send_report(Report::MouseReport(report)).await;
+                // Non-blocking emit: NEVER wedge the shared 16-deep
+                // KEYBOARD_REPORT_CHANNEL. `keyboard.run()` sends its own key
+                // HID reports through this same channel with a blocking
+                // `send().await`; a blocking scroll send here filled the
+                // channel during fast scrolling, which then blocked
+                // `keyboard.run()` and stopped it draining KEY_EVENT_CHANNEL —
+                // freezing the whole keyboard. Gate on len()<=1 so at most ~2
+                // reports are in flight (same discipline as run_pointer_flush).
+                //
+                // kobu (left-scroll-stops fix): consume the banked units AND
+                // advance the throttle ONLY when the report actually goes out.
+                // Previously the units were consumed unconditionally and then
+                // dropped when the channel was busy (e.g. while the RIGHT ball
+                // was filling it with pointer reports), so left-ball scroll
+                // "stopped" whenever the pointer was also moving. Keeping the
+                // units on a miss lets them retry on the next event; scroll_acc
+                // is clamped above so the catch-up stays small.
+                if KEYBOARD_REPORT_CHANNEL.len() <= 1
+                    && KEYBOARD_REPORT_CHANNEL
+                        .try_send(Report::MouseReport(report))
+                        .is_ok()
+                {
+                    self.scroll_acc -= units * SCROLL_STEP;
+                    self.next_emit_at = Some(now + throttle);
+                }
                 ProcessResult::Stop
             }
             _ => ProcessResult::Continue(event),
@@ -457,9 +650,19 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                 // any pending value, which is fine — we only need the
                 // "something happened" edge, not a count.
                 PERIPHERAL_ACTIVITY.signal(());
-                // Arm / refresh the auto mouse layer, but only on real motion
-                // so idle polling can't trap the user on the mouse layer.
+                // Arm / refresh the auto mouse layer, but only on real motion so
+                // idle polling can't trap the user on the mouse layer. Bank
+                // gross travel (|dx|+|dy| in raw 800-CPI counts) so the
+                // activation gate in `run_auto_mouse_layer` can require a
+                // *sustained* deliberate move rather than firing on a single
+                // tiny typing-wobble sample. Sum BEFORE signalling so the waiter
+                // sees this sample's travel. Single-threaded executor: this
+                // load+store never interleaves with run_auto_mouse_layer's
+                // store(0) (no await between), so it's effectively atomic.
                 if x != 0 || y != 0 {
+                    let travel = (x as i32).abs() + (y as i32).abs();
+                    let prev = AUTO_MOUSE_TRAVEL.load(Ordering::Relaxed);
+                    AUTO_MOUSE_TRAVEL.store(prev.saturating_add(travel), Ordering::Relaxed);
                     AUTO_MOUSE_ACTIVITY.signal(());
                 }
                 ProcessResult::Stop
@@ -470,5 +673,79 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
 
     fn get_keymap(&self) -> &RefCell<KeyMap<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>> {
         self.keymap
+    }
+}
+
+/// Drive the central's input gate (boot-trackball wedge fix, round 8).
+///
+/// Spawned on the central (see `src/central.rs`). Holds the PMW3610 pipeline —
+/// on BOTH halves — OFF until the host link can actually receive input, so a
+/// trackball rolled during the Mac connect+encryption bring-up cannot flood the
+/// radio / the shared split-link TX and stall the SMP handshake (the
+/// long-standing "roll the ball before BT connects → keyboard dead until a
+/// reconnect" wedge). The peripheral's per-sample pointer forward is the flood
+/// source; gating both halves' `read_event` at the source dries it up.
+///
+/// "host ready" = BLE link encrypted (`config::host_connected`) OR USB present
+/// (`config::vbus_present`), so USB-only operation is never gated off. A
+/// generous fallback force-opens the gate after ~12 s so a session with no host
+/// at all (neither BLE nor USB) does not leave the trackballs dead forever.
+///
+/// Sets `KOBU_INPUT_GATED` (the central's own local scroll ball reads it) and
+/// `KOBU_HOST_READY` (sent to the peripheral via `SplitMessage::HostReady`, which
+/// gates the peripheral's pointer ball). On the closed→open edge it wakes the
+/// parked `read_event` via `KOBU_INPUT_GATE_WAKE`.
+pub async fn run_input_gate_central() {
+    use rmk::input_device::battery::{KOBU_HOST_READY, KOBU_INPUT_GATED, KOBU_INPUT_GATE_WAKE};
+
+    // Round 10: do NOT open the gate on the first encrypted GATT read. On a
+    // bonded STALE resume (Mac still held the link when kobu rebooted) the Mac
+    // re-encrypts instantly from the stored LTK and fires a dense GATT cache-
+    // revalidation burst right at that moment. Opening the trackball straight
+    // into that burst let the ~500 Hz pointer flood starve the single shared
+    // trouBLE TX queue/pool, parking the lone TxRunner on a host PDU and hanging
+    // the link (no reset). Require host_connected to hold for SETTLE_MS first,
+    // so the burst drains and host TX credits are flowing before the trackball
+    // is admitted. Resets on disconnect so a stale resume re-arms cleanly.
+    const SETTLE_MS: u64 = 2000;
+    // Backstop for a session with NO host at all (no BLE + no USB) so the balls
+    // aren't dead forever. Far longer than any real connect+settle, so it never
+    // pre-empts the settle path during the dangerous bring-up window.
+    const FALLBACK_MS: u64 = 20_000;
+    let mut waited_ms: u64 = 0;
+    let mut connected_ms: u64 = 0;
+    let mut announced_open = false;
+    loop {
+        if config::host_connected() {
+            connected_ms = connected_ms.saturating_add(100);
+        } else {
+            connected_ms = 0;
+        }
+        let host_settled = connected_ms >= SETTLE_MS;
+        let fallback = waited_ms >= FALLBACK_MS;
+        let ready = host_settled || config::vbus_present() || fallback;
+        KOBU_HOST_READY.store(ready, Ordering::Release);
+
+        let gated_now = KOBU_INPUT_GATED.load(Ordering::Relaxed);
+        if ready && gated_now {
+            KOBU_INPUT_GATED.store(false, Ordering::Relaxed);
+            KOBU_INPUT_GATE_WAKE.signal(());
+            if !announced_open {
+                announced_open = true;
+                defmt::info!(
+                    "kobu: input gate OPEN (settled={}, vbus={}, fallback={})",
+                    host_settled,
+                    config::vbus_present(),
+                    fallback
+                );
+            }
+        } else if !ready && !gated_now {
+            KOBU_INPUT_GATED.store(true, Ordering::Relaxed);
+            announced_open = false;
+            defmt::info!("kobu: input gate CLOSED (host link down / re-arming)");
+        }
+
+        Timer::after_millis(100).await;
+        waited_ms = waited_ms.saturating_add(100);
     }
 }

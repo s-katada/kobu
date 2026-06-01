@@ -13,7 +13,8 @@ mod keyboard_central {
     use crate::battery_source::{CentralBatteryTagger, KobuBatterySourceTap};
     use crate::status_led::StatusLedController;
     use crate::trackball::{
-        AxisRelabel, PointerProcessor, ScrollProcessor, run_auto_mouse_layer, run_pointer_flush,
+        AxisRelabel, PointerProcessor, ScrollProcessor, run_auto_mouse_layer, run_input_gate_central,
+        run_pointer_flush,
     };
 
     // Status LED controller declared via the `rmk_macro` controller
@@ -76,15 +77,17 @@ mod keyboard_central {
         let mut tagged_adc = CentralBatteryTagger::new(adc_device);
         let mut battery_source_tap = KobuBatterySourceTap::new(&keymap);
 
-        // "ビュンビュン" default: assert a 2.5× pointer-CPI multiplier at
-        // boot (effective ~2000 CPI over the 800 hardware CPI). The
-        // multiplier is applied in trackball.rs::run_pointer_flush and is
-        // live-tunable from kobu-config (Via Custom Channel 0xC0 id 0x01,
-        // range 0.2×–3.2×). Persistence across reboots is a follow-up, so
-        // we re-assert the snappy default every boot rather than relying
-        // on the atomic's 1000 (= 1.0×) initialiser.
+        // Pointer-CPI multiplier at boot. Lowered 2500 (2.5×) → 1500 (1.5×):
+        // 2.5× made the smallest cursor step ~2-3px, which fought precise
+        // click-aim ("微調整が厳しい"). 1.5× gives finer granularity while macOS
+        // pointer acceleration still makes fast flicks fast. The dominant
+        // "もっさり" lag was the split-link slave latency (fixed separately in
+        // build.rs::patch_rmk_split_conn_low_latency), not the CPI. Applied in
+        // trackball.rs::run_pointer_flush and live-tunable from kobu-config
+        // (Via Custom Channel 0xC0 id 0x01, range 0.2×–3.2×) so it can be
+        // re-dialed without a reflash. Re-asserted every boot (no persistence).
         ::rmk::input_device::battery::KOBU_TRACKBALL_CPI
-            .store(2500, ::core::sync::atomic::Ordering::Relaxed);
+            .store(1500, ::core::sync::atomic::Ordering::Relaxed);
 
         ::rmk::embassy_futures::join::join(
             ::rmk::embassy_futures::join::join(
@@ -114,11 +117,20 @@ mod keyboard_central {
             ::rmk::embassy_futures::join::join(
                 ::rmk::embassy_futures::join::join(
                     status_led.polling_loop(),
-                    // Drain the coalesced pointer accumulator to the host at
-                    // the BLE report rate. Decouples the 2 kHz PMW3610 event
-                    // rate from the slower wireless HID link so trackball
-                    // motion is summed, not dropped. See src/trackball.rs.
-                    run_pointer_flush(),
+                    ::rmk::embassy_futures::join::join(
+                        // Drain the coalesced pointer accumulator to the host at
+                        // the BLE report rate. Decouples the PMW3610 event rate
+                        // from the slower wireless HID link so trackball motion
+                        // is summed, not dropped. See src/trackball.rs.
+                        run_pointer_flush(),
+                        // Round 8 boot-trackball wedge fix: hold the PMW3610
+                        // pipeline (both halves) OFF until the host link is READY
+                        // (BLE-encrypted or USB), so motion can't stall the Mac
+                        // SMP/encryption bring-up. Drives KOBU_INPUT_GATED +
+                        // KOBU_HOST_READY (→ peripheral via HostReady). See
+                        // src/trackball.rs::run_input_gate_central.
+                        run_input_gate_central(),
+                    ),
                 ),
                 // Auto mouse layer: switch to layer 4 while the right-half
                 // trackball is moving, fall back after an idle window. Shares

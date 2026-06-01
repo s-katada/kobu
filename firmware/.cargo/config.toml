@@ -12,3 +12,12 @@ KEYBOARD_TOML_PATH = { value = "keyboard.toml", relative = true }
 # defmt) to blow rustc's default 8 MiB thread stack on some hosts. 16 MiB is
 # what rustc itself recommends in the SIGSEGV hint.
 RUST_MIN_STACK = "16777216"
+# Round 10 / Layer D (boot-trackball wedge, defence-in-depth): widen trouble-host's
+# ONE shared outbound queue + packet pool (defaults 8 / 16) that BOTH the Mac host
+# link and the split-peripheral link multiplex through on the single radio. A
+# bigger pool keeps RX reassembly buffers available for the Mac's PDUs even while
+# split-link pointer traffic is queued, breaking the "pool pinned -> inbound drop"
+# reinforcing loop during a stale resume. trouble-host's build.rs reads these
+# (crate name uppercased, '-'->'_'); needs `cargo clean -p trouble-host` once.
+TROUBLE_HOST_L2CAP_TX_QUEUE_SIZE = "16"
+TROUBLE_HOST_DEFAULT_PACKET_POOL_SIZE = "32"
