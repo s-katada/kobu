@@ -93,18 +93,19 @@ const AUTO_MOUSE_LAYER: u8 = 4;
 /// 250 → 700 → 500 → 250 → 400 ms (the 400 ms margin was for sparse split-sample
 /// arrival, but R23 confirmed samples arrive ~125/s and the HOLD now waits on the
 /// per-sample AUTO_MOUSE_KEEPALIVE, so continuous mousing holds the layer fine at
-/// a much shorter timeout). Cut HARD to 140 ms per the user's request ("結構ガク
+/// a much shorter timeout). Cut HARD to 150 ms per the user's request ("結構ガク
 /// ッと短く") so the layer drops promptly once you stop moving — less lingering
-/// mouse layer when you go back to typing.
+/// mouse layer when you go back to typing. (Briefly tried 140; user settled on
+/// 150.)
 ///
 /// This is the HOLD timeout ONLY; re-ACTIVATION is still guarded by
 /// AUTO_MOUSE_PRIOR_IDLE (300 ms) + the travel threshold. Continuous/slow mousing
 /// keeps the layer (KEEPALIVE fires on every arriving sample, ~8 ms apart, far
-/// under 140 ms). ⚠️ Pressing a layer-4 mouse button does NOT refresh this window
-/// (only ball motion does), so "stop, pause >140 ms, then click" can drop the
+/// under 150 ms). ⚠️ Pressing a layer-4 mouse button does NOT refresh this window
+/// (only ball motion does), so "stop, pause >150 ms, then click" can drop the
 /// layer before the click and emit a base-layer key instead. If that bites,
 /// raise back toward 250–300 ms. Tune by feel.
-const AUTO_MOUSE_TIMEOUT: Duration = Duration::from_millis(140);
+const AUTO_MOUSE_TIMEOUT: Duration = Duration::from_millis(150);
 
 /// Require-prior-idle window (first line of defence against typing false-
 /// triggers). Suppress auto-mouse *activation* for this long after any key
