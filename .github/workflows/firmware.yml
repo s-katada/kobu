@@ -4,13 +4,13 @@ on:
   push:
     branches: [main]
     paths:
-      - "firmware/**"
+      - "firmware/rmk/**"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/firmware.yml"
   pull_request:
     paths:
-      - "firmware/**"
+      - "firmware/rmk/**"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/firmware.yml"
@@ -32,7 +32,7 @@ jobs:
       - name: Cache cargo target and installed binaries
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: firmware -> target
+          workspaces: firmware/rmk -> target
           # Bust the cache when the nix-pinned toolchain changes.
           # Without this, a `flake.lock` bump can leave cached
           # build-script binaries linking to stale /nix/store paths
@@ -45,7 +45,7 @@ jobs:
       - name: Build central and peripheral
         run: |
           nix develop .#firmware --command bash -eux <<'EOF'
-          cd firmware
+          cd firmware/rmk
           cargo build --release --bin central
           cargo build --release --bin peripheral
           cargo objcopy --release --bin central    -- -O ihex central.hex
@@ -68,7 +68,7 @@ jobs:
       - name: Build factory-reset central and peripheral
         run: |
           nix develop .#firmware --command bash -eux <<'EOF'
-          cd firmware
+          cd firmware/rmk
           sed -i 's/^clear_layout = false$/clear_layout = true/' keyboard.toml
           # Verify the swap actually happened so we don't silently ship
           # an incorrectly-built reset UF2.
@@ -90,10 +90,10 @@ jobs:
         with:
           name: kobu-firmware
           path: |
-            firmware/central.uf2
-            firmware/peripheral.uf2
-            firmware/central-reset.uf2
-            firmware/peripheral-reset.uf2
+            firmware/rmk/central.uf2
+            firmware/rmk/peripheral.uf2
+            firmware/rmk/central-reset.uf2
+            firmware/rmk/peripheral-reset.uf2
           if-no-files-found: error
 
       # Publish a rolling pre-release tagged `firmware-latest` so the
@@ -106,7 +106,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euxo pipefail
-          cd firmware
+          cd firmware/rmk
           SHA_SHORT=$(git rev-parse --short HEAD)
           DATE_UTC=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
           NOTES=$(cat <<NOTE
