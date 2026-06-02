@@ -1,5 +1,5 @@
 {
-  description = "kobu firmware, hardware & web config app";
+  description = "kobu firmware (RMK + ZMK), hardware & web config app";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -16,9 +16,18 @@
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    # ZMK build toolchain (west + Zephyr + gcc-arm-embedded) as a pure Nix
+    # derivation — drives the firmware/zmk build (see `packages.zmk*` and the
+    # `zmk` devShell below). No west / Zephyr / SDK need be installed on the
+    # host. Consumes firmware/zmk/config/west.yml to pin ZMK + modules.
+    zmk-nix = {
+      url = "github:lilyinstarlight/zmk-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, nixpkgs-node, flake-utils, fenix }:
+  outputs = { self, nixpkgs, nixpkgs-node, flake-utils, fenix, zmk-nix }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -165,7 +174,7 @@
           # Required by bindgen (used by nrf-mpsl-sys through rmk).
           pkgs.llvmPackages.libclang
           pkgs.clang
-          # Render keymap SVG from firmware/keymap/*.yaml.
+          # Render keymap SVG from firmware/rmk/keymap/*.yaml.
           pkgs.python3Packages.keymap-drawer
         ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
           pkgs.systemd
@@ -182,8 +191,70 @@
           # lacks a compatible libstdc++.
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
         };
+
+        # ── ZMK firmware (firmware/zmk) ──────────────────────────────────
+        # The ZMK config lives in the firmware/zmk/ subtree; root the build
+        # there so zmk-nix sees config/ + zephyr/module.yml at the src root.
+        zmkLib = zmk-nix.legacyPackages.${system};
+        zmkSrc = pkgs.lib.sourceFilesBySuffices ./firmware/zmk [
+          ".board" ".cmake" ".conf" ".defconfig" ".dts" ".dtsi"
+          ".json" ".keymap" ".overlay" ".shield" ".yml" "_defconfig"
+        ];
+        zmkBoard = "seeeduino_xiao_ble";
+        # FIXED-OUTPUT hash of the west-fetched module tree (ZMK v0.3 + Zephyr
+        # + pmw3610 driver + rgbled-widget v0.3, per firmware/zmk/config/west.yml).
+        # Re-bootstrap if that west.yml changes: set lib.fakeHash, build, paste
+        # the reported `got: sha256-...`.
+        zmkDepsHash = "sha256-jeXqoHbIo2Qci2whC/G3ITNCDzCNJul85DhmsfSncA0=";
+        zmkMeta = {
+          license = pkgs.lib.licenses.mit;
+          platforms = pkgs.lib.platforms.all;
+        };
+
+        # Both halves -> $out/zmk_left.uf2 + zmk_right.uf2. enableZmkStudio is
+        # auto-applied to the central (left) part only.
+        zmkFirmware = zmkLib.buildSplitKeyboard {
+          name = "kobu-zmk-firmware";
+          src = zmkSrc;
+          board = zmkBoard;
+          shield = "kobu_%PART% rgbled_adapter";
+          parts = [ "left" "right" ];
+          centralPart = "left";
+          enableZmkStudio = true;
+          zephyrDepsHash = zmkDepsHash;
+          meta = zmkMeta // { description = "kobu split keyboard ZMK firmware (both halves)"; };
+        };
+
+        # settings_reset image; reuses the same westDeps (no second fetch/hash).
+        zmkReset = zmkLib.buildKeyboard {
+          name = "kobu-zmk-settings-reset";
+          src = zmkSrc;
+          board = zmkBoard;
+          shield = "settings_reset";
+          zephyrDepsHash = zmkDepsHash;
+          inherit (zmkFirmware) westDeps;
+          meta = zmkMeta // { description = "kobu settings_reset UF2"; };
+        };
+
+        # kobu-named UF2 bundle. `nix build .#zmk-bundle` -> result/ has
+        # kobu_left.uf2 / kobu_right.uf2 / kobu_reset.uf2.
+        zmkBundle = pkgs.runCommand "kobu-zmk-uf2-bundle" { } ''
+          mkdir -p $out
+          cp -L ${zmkFirmware}/zmk_left.uf2  $out/kobu_left.uf2
+          cp -L ${zmkFirmware}/zmk_right.uf2 $out/kobu_right.uf2
+          cp -L ${zmkReset}/zmk.uf2          $out/kobu_reset.uf2
+        '';
       in
       {
+        packages = {
+          # ZMK firmware (both halves).        nix build .#zmk
+          zmk = zmkFirmware;
+          # kobu-named UF2 bundle + reset.     nix build .#zmk-bundle
+          zmk-bundle = zmkBundle;
+          # settings_reset UF2 only.           nix build .#zmk-reset
+          zmk-reset = zmkReset;
+        };
+
         devShells = {
           # Full kit — both firmware and web. The default shell for
           # local dev when you might switch between firmware/ and web/
@@ -207,14 +278,14 @@
             '';
           };
 
-          # Firmware-only. Used by `.github/workflows/firmware.yml` so
-          # the CI runner does not also have to materialise Node /
-          # pnpm just to build the embedded binary.
+          # RMK firmware-only (firmware/rmk). Used by `firmware/rmk/.envrc`
+          # and `.github/workflows/firmware.yml` so the CI runner does not
+          # also have to materialise Node / pnpm just to build the binary.
           firmware = pkgs.mkShell {
             packages = firmwarePackages;
             env = firmwareEnv;
             shellHook = ''
-              echo "kobu firmware devshell"
+              echo "kobu firmware (RMK) devshell"
               echo "  rustc: $(rustc --version)"
             '';
           };
@@ -228,6 +299,39 @@
               echo "kobu web devshell"
               echo "  node:  $(node --version)"
               echo "  pnpm:  $(pnpm --version)"
+            '';
+          };
+
+          # ZMK build shell (west + cmake + ninja + dtc + gcc-arm-embedded +
+          # python). Used by `firmware/zmk/.envrc` for manual `west` builds /
+          # inspection; the packaged build is `nix build .#zmk-bundle`.
+          #
+          # A lean, hand-rolled shell rather than zmk-nix's own devShell: the
+          # latter pulls Zephyr's full python requirements (incl. canopen),
+          # whose flaky timing tests fail to build on some nixpkgs. ZMK only
+          # needs west + a handful of helpers to `west build`, so this avoids
+          # canopen entirely.
+          zmk = pkgs.mkShell {
+            packages = [
+              pkgs.cmake
+              pkgs.ninja
+              pkgs.dtc
+              pkgs.gcc-arm-embedded
+              pkgs.git
+              (pkgs.python3.withPackages (ps: [
+                ps.west
+                ps.pyelftools
+                ps.pyyaml
+                ps.pykwalify
+              ]))
+            ];
+            env = {
+              ZEPHYR_TOOLCHAIN_VARIANT = "gnuarmemb";
+              GNUARMEMB_TOOLCHAIN_PATH = "${pkgs.gcc-arm-embedded}";
+            };
+            shellHook = ''
+              echo "kobu ZMK build shell (west + gcc-arm-embedded)"
+              echo "  packaged build (from repo root): nix build .#zmk-bundle"
             '';
           };
         };

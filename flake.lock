@@ -76,7 +76,8 @@
         "fenix": "fenix",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs",
-        "nixpkgs-node": "nixpkgs-node"
+        "nixpkgs-node": "nixpkgs-node",
+        "zmk-nix": "zmk-nix"
       }
     },
     "rust-analyzer-src": {
@@ -108,6 +109,26 @@
       "original": {
         "owner": "nix-systems",
         "repo": "default",
+        "type": "github"
+      }
+    },
+    "zmk-nix": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1780190665,
+        "narHash": "sha256-qjX/sj0d8rYXAoXrL5Wj9APeO/yPIYL3r0+WmsZ4x6g=",
+        "owner": "lilyinstarlight",
+        "repo": "zmk-nix",
+        "rev": "0e4a429a56dfc7f1cd8a354373e0bd22b5098276",
+        "type": "github"
+      },
+      "original": {
+        "owner": "lilyinstarlight",
+        "repo": "zmk-nix",
         "type": "github"
       }
     }
