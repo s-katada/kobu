@@ -107,16 +107,17 @@ keymap = [
         # and 9 are phantom (no switch). Per the user request the whole cluster
         # was shifted OUTWARD on both halves and the 直下 key on each half is now
         # plain Backspace (previously the OUTER edge was Backspace):
-        #   LEFT  (XIAO直下 → 外側): BS, かな/Shift, Ctrl, BS/Cmd
+        #   LEFT  (XIAO直下 → 外側): BS, 英数/Shift, Ctrl, BS/Cmd
         #   RIGHT (XIAO直下 → 外側): BS, Esc/Alt, Space/LT(2), Enter/LT(3)
-        # The 直下-adjacent LEFT thumb is MT(Language1, LShift): tap = かな
-        # (Language1, macOS Japanese IME on), hold = LShift — per the user's
-        # "Shift / Japanese-input" intent (was Language2 = 英数 = English).
+        # The 直下-adjacent LEFT thumb is MT(Language2, LShift): tap = 英数
+        # (Language2 = 英数 = English input on macOS JIS), hold = LShift — per
+        # the user's request to make this thumb Shift / English (was Language1
+        # = かな).
         # NOTE: the momentary thumb overrides on layers 1/2/3 (英数↔かな pair,
         # Win/Linux modifiers) still sit at their old columns and so no longer
         # line up with these shifted base-layer thumbs — shift them too if that
         # cross-layer alignment is wanted.
-        ["No", "MT(Backspace, LGui, FH)", "LCtrl", "MT(Language1, LShift, FH)", "Backspace", "Backspace", "MT(Escape, LAlt, FH)", "LT(2, Space, FH)", "LT(3, Enter, FH)", "No"],
+        ["No", "MT(Backspace, LGui, FH)", "LCtrl", "MT(Language2, LShift, FH)", "Backspace", "Backspace", "MT(Escape, LAlt, FH)", "LT(2, Space, FH)", "LT(3, Enter, FH)", "No"],
     ],
     # Layer 1 — Win/Linux overlay (ZMK layer1)
     [
@@ -130,9 +131,10 @@ keymap = [
         ["Kc1", "Kc2", "Kc3", "Kc4", "Kc5", "Kc6", "Kc7", "Kc8", "Kc9", "Kc0"],
         ["WM(Kc1, LShift)", "WM(Kc2, LShift)", "WM(Kc3, LShift)", "WM(Kc4, LShift)", "WM(Kc5, LShift)", "Left", "Down", "Up", "Right", "_"],
         ["WM(Kc6, LShift)", "WM(Kc7, LShift)", "WM(Kc8, LShift)", "WM(Kc9, LShift)", "WM(Kc0, LShift)", "No", "No", "No", "No", "_"],
-        # かな/Shift moved col4→col3 (one thumb outward) to sit under the SAME
-        # physical thumb as the base-layer かな (Layer 0 col3), so holding
-        # LT(2)+that thumb is consistent with tapping it on the base layer.
+        # Layer-2 language thumb = かな/Shift (Language1 = Japanese IME on). The
+        # SAME physical thumb on the base layer is 英数 (Language2, Layer 0 col3):
+        # so tap-on-base = English, hold-LT(2)+that-thumb = Japanese — per the
+        # user's request to split the two (base English / layer-2 Japanese).
         ["_", "_", "_", "MT(Language1, LShift, FH)", "_", "_", "_", "_", "_", "_"],
     ],
     # Layer 3 — settings, media, BLE (ZMK layer3). Source &bt BT_SEL 0..3 →
@@ -153,7 +155,12 @@ keymap = [
     # verbatim per "正確に実装".
     [
         ["WM(LeftBracket, LGui|LShift)", "WM(RightBracket, LGui|LShift)", "No", "No", "No", "MouseBtn1", "MouseBtn2", "MouseBtn2", "MouseBtn3", "_"],
-        ["TD(2)", "WM(RightBracket, LGui)", "No", "No", "No", "No", "No", "No", "No", "_"],
+        # cols 2/3 (= left-hand D / F home keys): Tab + held LGui, so you can
+        # cmd+tab app-switch WHILE mousing the right ball — hold LGui (F, index)
+        # and tap Tab (D, middle) to cycle apps. KobitoKey reaches cmd+tab the
+        # same way (a held Cmd thumb + Tab); the auto-mouse layer used to hijack
+        # the thumbs so kobu couldn't, hence exposing held-Cmd + Tab here.
+        ["TD(2)", "WM(RightBracket, LGui)", "Tab", "LGui", "No", "No", "No", "No", "No", "_"],
         ["LCtrl", "No", "WM(C, LGui)", "WM(V, LGui)", "No", "No", "No", "No", "No", "_"],
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
     ],
@@ -215,8 +222,24 @@ morses = [
     { tap = "WM(LeftBracket, LGui)", hold = "LShift", profile = "FH" },  # TD(2) = mt LSHFT LG(LBKT) on layer 4
 ]
 
+# `hold_timeout` = how long you hold an FH key (the LT layer-taps LT(2,Space)/
+# LT(3,Enter) and the MT mod-taps) before a standalone hold registers as the
+# hold action (layer / modifier). Bumped to 350 ms per the user: the layer was
+# activating too quickly on a deliberate long-press, so this makes "press →
+# layer active" clearly more deliberate (fewer accidental layer triggers).
+# Release still drops the layer instantly (momentary, no timeout). Because
+# `hold_on_other_press = true`, chording another key during the hold STILL
+# activates the layer/mod immediately — so normal layer use (hold thumb, press a
+# key) is unaffected; this longer timeout only governs the hold-ALONE timing.
+#
+# ⚠️ FLASH-STORED: hold_timeout/morse profiles are persisted to flash and
+# re-read at boot, and rmk-0.8.2's build-hash auto-invalidation is disabled, so
+# a PLAIN reflash keeps the OLD value. To apply this you MUST flash once with
+# [storage] clear_layout=true (central-clearlayout.uf2 — wipes the stored
+# keymap+behavior and rewrites from this file, KEEPS BLE bonds), then flash the
+# normal central.uf2.
 [behavior.morse.profiles]
-FH = { hold_on_other_press = true, hold_timeout = "200ms", gap_timeout = "200ms" }
+FH = { hold_on_other_press = true, hold_timeout = "350ms", gap_timeout = "200ms" }
 
 [[behavior.macro.macros]]
 operations = [
@@ -327,8 +350,14 @@ initial_state_active = false
 # auto-generated entry — no custom processor or override.
 [[split.central.input_device.pmw3610]]
 name = "left"
-cpi = 800
+cpi = 600
 force_awake = true
+# kobu: match ZMK CONFIG_PMW3610_SMART_ALGORITHM=y (set on BOTH halves in
+# KobitoKey). Datasheet surface-tracking quality — read_motion toggles reg 0x32
+# on the SHUTTER threshold so tracking stays reliable on glossy/marginal
+# surfaces (fewer count dropouts that would read as micro-もっさり). Report
+# cadence unaffected; cost is a few SPI bytes + an occasional reg write.
+smart_mode = true
 
 [split.central.input_device.pmw3610.spi]
 instance = ""
@@ -378,8 +407,12 @@ initial_state_active = false
 # `src/trackball.rs`.
 [[split.peripheral.input_device.pmw3610]]
 name = "right"
-cpi = 800
+cpi = 600
 force_awake = true
+# kobu: match ZMK CONFIG_PMW3610_SMART_ALGORITHM=y — this is the POINTER half
+# (the right ball), the exact ball ZMK runs the smart algorithm on. See the
+# left-half note above for the mechanism.
+smart_mode = true
 
 [split.peripheral.input_device.pmw3610.spi]
 instance = ""
