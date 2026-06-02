@@ -89,16 +89,22 @@ static AUTO_MOUSE_TRAVEL: AtomicI32 = AtomicI32::new(0);
 /// isn't, `activate_layer` warns and no-ops rather than panicking.
 const AUTO_MOUSE_LAYER: u8 = 4;
 
-/// How long the mouse layer stays active after the last pointer motion. Was 250
-/// ms, but the layer dropped mid-mouse during slow/sparse motion (the user's
-/// "マウスは動くのにレイヤーが消える"): under sparse split-sample arrival the HOLD
-/// window lapsed between samples. Raised to 400 ms for margin. This is the HOLD
-/// timeout ONLY — re-ACTIVATION after a stop is still guarded by
-/// AUTO_MOUSE_PRIOR_IDLE (300 ms) + the travel threshold on AUTO_MOUSE_ACTIVITY,
-/// so a longer hold does NOT reopen the typing-after-mousing false-trigger (once
-/// you stop moving, no pointer reports arrive and the layer drops within 400 ms).
-/// Tune by feel.
-const AUTO_MOUSE_TIMEOUT: Duration = Duration::from_millis(400);
+/// How long the mouse layer stays active after the last pointer motion. History:
+/// 250 → 700 → 500 → 250 → 400 ms (the 400 ms margin was for sparse split-sample
+/// arrival, but R23 confirmed samples arrive ~125/s and the HOLD now waits on the
+/// per-sample AUTO_MOUSE_KEEPALIVE, so continuous mousing holds the layer fine at
+/// a much shorter timeout). Cut HARD to 140 ms per the user's request ("結構ガク
+/// ッと短く") so the layer drops promptly once you stop moving — less lingering
+/// mouse layer when you go back to typing.
+///
+/// This is the HOLD timeout ONLY; re-ACTIVATION is still guarded by
+/// AUTO_MOUSE_PRIOR_IDLE (300 ms) + the travel threshold. Continuous/slow mousing
+/// keeps the layer (KEEPALIVE fires on every arriving sample, ~8 ms apart, far
+/// under 140 ms). ⚠️ Pressing a layer-4 mouse button does NOT refresh this window
+/// (only ball motion does), so "stop, pause >140 ms, then click" can drop the
+/// layer before the click and emit a base-layer key instead. If that bites,
+/// raise back toward 250–300 ms. Tune by feel.
+const AUTO_MOUSE_TIMEOUT: Duration = Duration::from_millis(140);
 
 /// Require-prior-idle window (first line of defence against typing false-
 /// triggers). Suppress auto-mouse *activation* for this long after any key
