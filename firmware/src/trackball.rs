@@ -111,19 +111,47 @@ const AUTO_MOUSE_PRIOR_IDLE: Duration = Duration::from_millis(300);
 
 /// Travel gate (the real fix, second/independent line of defence). Even after
 /// the prior-idle window passes, do NOT activate until gross pointer travel
-/// (Σ|dx|+|dy| in raw 800-CPI counts) exceeds this within one un-paused motion
-/// burst. At 800 CPI, 80 counts ≈ 2.5 mm of ball travel — a short deliberate
-/// flick clears it within a few ms (the PMW3610 polls at ~2 kHz); a hard-
-/// keystroke wobble is a brief sub-mm oscillation that decays before it can sum
-/// to 80, so it never activates. Lower = twitchier; 60–120 is the sane range.
-const AUTO_MOUSE_TRAVEL_THRESHOLD: i32 = 80;
+/// (Σ|dx|+|dy| in raw counts) exceeds this within one un-paused motion burst.
+///
+/// Was 80 (≈2.5 mm of ball travel), which — combined with the old 60 ms decay —
+/// made a GENTLE/slow deliberate move ("そっと動かす") UNABLE to ever activate:
+/// soft rolling emits only ~1–2 raw counts per non-zero sample with the non-zero
+/// samples landing >60 ms apart (the sub-count polls return x=y=0 yet the cursor
+/// still creeps via the `pend_*` carry), so the decay zeroed travel on every
+/// sample and it never summed to 80. Net effect: no layer 4 → no purple LED →
+/// the layer-4 mouse buttons unreachable — the user's exact report.
+///
+/// Lowered to 1 (the absolute floor — ANY single non-zero raw count activates)
+/// per the user's explicit request ("1にしちゃおう", after 80→45→25→18→10→3).
+/// Typing safety does NOT depend on this threshold: during active typing the
+/// PRIOR_IDLE 300 ms window below zeroes travel on EVERY sample that arrives
+/// within 300 ms of a keypress, so the bank can never accumulate while you are
+/// actually typing — no matter how low this is (the user's "叩くだけでマウスレイ
+/// ヤーになってほしくない" is handled there, not here).
+///
+/// ⚠️ At 1 there is NO sensor-noise margin: a single stray PMW3610 jitter count
+/// while you are NOT touching the ball (>300 ms after the last keypress) can
+/// flip layer 4 on for up to AUTO_MOUSE_TIMEOUT (400 ms). If that proves
+/// annoying (random purple LED / a mouse-layer keycode slipping out when typing
+/// resumes within that 400 ms), raise back to 3–5. Kept at 1 by request.
+const AUTO_MOUSE_TRAVEL_THRESHOLD: i32 = 1;
 
 /// Travel-accumulator decay window. If no motion sample arrives for this long,
 /// the banked travel is forgotten before the next gate check, so a tiny wobble
-/// now and another 150 ms later never *sum* across the quiet gap into a false
-/// activation. Short enough that two distinct wobbles don't chain, long enough
-/// that the sub-ms sample gaps inside one genuine 2 kHz move never reset it.
-const AUTO_MOUSE_TRAVEL_DECAY: Duration = Duration::from_millis(60);
+/// now and another wobble later never *sum* across the quiet gap into a false
+/// activation.
+///
+/// Was 60 ms — too short for genuine slow motion: a gentle "そっと" roll's
+/// non-zero samples arrive sparsely (often 60–120 ms apart, since most polls are
+/// sub-count), so a 60 ms window reset the bank on essentially every sample and
+/// the move could never accumulate to threshold. Raised to 160 ms so those
+/// sparse slow-motion samples *sum* into one burst. Kept well UNDER the typical
+/// ~200 ms inter-keystroke cadence so consecutive keystroke wobbles still do NOT
+/// chain across the window (an adversarial-review concern about 200 ms), and
+/// PRIOR_IDLE independently zeroes travel during active typing regardless. Long
+/// enough that the sub-ms sample gaps inside one genuine high-rate move never
+/// reset it. 120–180 ms is the sane range.
+const AUTO_MOUSE_TRAVEL_DECAY: Duration = Duration::from_millis(160);
 
 /// Drive the auto mouse layer from pointer activity.
 ///
