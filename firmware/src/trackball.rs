@@ -66,6 +66,16 @@ pub static PERIPHERAL_ACTIVITY: Signal<CriticalSectionRawMutex, ()> = Signal::ne
 /// lost and a fast flurry of samples collapses to "still moving".
 static AUTO_MOUSE_ACTIVITY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// Pulsed on every EMITTED pointer report (real cursor motion), including
+/// slow/small mousing where the raw sensor sample was sub-count (x=y=0) and so
+/// never pulsed [`AUTO_MOUSE_ACTIVITY`] — yet `pend_*` still periodically crosses
+/// a full count and emits a report, so the cursor visibly moves. The auto-mouse
+/// HOLD branch waits on EITHER signal, so layer 4 stays active while you keep
+/// mousing slowly instead of dropping after [`AUTO_MOUSE_TIMEOUT`] of zero-delta
+/// samples (the "マウスは動くのにレイヤーが消える" bug). It feeds the HOLD only,
+/// never ACTIVATION, so it can't switch layer 4 on during typing.
+static AUTO_MOUSE_KEEPALIVE: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+
 /// Gross pointer travel (Σ|dx|+|dy| in raw 800-CPI counts) banked by
 /// [`PointerProcessor`] since the last time [`run_auto_mouse_layer`] inspected
 /// it. Separate from `POINTER_ACCUM_*` (which `run_pointer_flush` zeroes on its
@@ -79,11 +89,16 @@ static AUTO_MOUSE_TRAVEL: AtomicI32 = AtomicI32::new(0);
 /// isn't, `activate_layer` warns and no-ops rather than panicking.
 const AUTO_MOUSE_LAYER: u8 = 4;
 
-/// How long the mouse layer stays active after the last pointer motion. 700 ms
-/// keeps it up while you pause to aim a click but releases it soon after you
-/// stop mousing, so typing right afterwards lands on the normal layers. Tune by
-/// feel (≈400–1000 ms is reasonable).
-const AUTO_MOUSE_TIMEOUT: Duration = Duration::from_millis(700);
+/// How long the mouse layer stays active after the last pointer motion. Was 250
+/// ms, but the layer dropped mid-mouse during slow/sparse motion (the user's
+/// "マウスは動くのにレイヤーが消える"): under sparse split-sample arrival the HOLD
+/// window lapsed between samples. Raised to 400 ms for margin. This is the HOLD
+/// timeout ONLY — re-ACTIVATION after a stop is still guarded by
+/// AUTO_MOUSE_PRIOR_IDLE (300 ms) + the travel threshold on AUTO_MOUSE_ACTIVITY,
+/// so a longer hold does NOT reopen the typing-after-mousing false-trigger (once
+/// you stop moving, no pointer reports arrive and the layer drops within 400 ms).
+/// Tune by feel.
+const AUTO_MOUSE_TIMEOUT: Duration = Duration::from_millis(400);
 
 /// Require-prior-idle window (first line of defence against typing false-
 /// triggers). Suppress auto-mouse *activation* for this long after any key
@@ -162,6 +177,7 @@ pub async fn run_auto_mouse_layer<
     // clean burst.
     AUTO_MOUSE_TRAVEL.store(0, Ordering::Relaxed);
     AUTO_MOUSE_ACTIVITY.reset();
+    AUTO_MOUSE_KEEPALIVE.reset();
 
     let mut active = false;
     // Low-32-bit (32768 Hz) tick of the last motion sample counted toward the
@@ -226,8 +242,20 @@ pub async fn run_auto_mouse_layer<
             // gate is intentionally NOT re-checked here — once mousing, any
             // motion (even a small aim nudge) should hold the layer so the
             // layer-4 mouse buttons stay reachable.
-            match with_timeout(AUTO_MOUSE_TIMEOUT, AUTO_MOUSE_ACTIVITY.wait()).await {
-                Ok(()) => {} // more motion — keep the layer, re-arm the window
+            // Hold layer 4 while EITHER raw motion (ACTIVITY) OR an emitted
+            // report (KEEPALIVE) arrives within the window. KEEPALIVE covers
+            // slow/small mousing whose raw sensor samples are sub-count (x=y=0)
+            // but still move the cursor via the pend_* carry — without it the
+            // layer dropped mid-mouse ("マウスは動くのにレイヤーが消える").
+            let keep_alive = async {
+                ::rmk::embassy_futures::select::select(
+                    AUTO_MOUSE_ACTIVITY.wait(),
+                    AUTO_MOUSE_KEEPALIVE.wait(),
+                )
+                .await;
+            };
+            match with_timeout(AUTO_MOUSE_TIMEOUT, keep_alive).await {
+                Ok(_) => {} // more motion — keep the layer, re-arm the window
                 Err(_) => {
                     if let Ok(mut km) = keymap.try_borrow_mut() {
                         km.deactivate_layer(AUTO_MOUSE_LAYER);
@@ -241,35 +269,28 @@ pub async fn run_auto_mouse_layer<
     }
 }
 
-// ─── Pointer delta accumulator ──────────────────────────────────────
+// ─── Pointer emission (inline, like ScrollProcessor) ────────────────
 //
-// Why this exists (the "fully-wireless trackball feels のっぺり" bug):
+// History / why this changed: the right-half PMW3610 floods the central at
+// the poll rate and every queue on the path to the host is drop-oldest, so
+// an EARLIER design had `PointerProcessor` only *accumulate* into globals
+// while a SEPARATE `run_pointer_flush` task drained them on a fixed 4 ms
+// tick (gated on `KEYBOARD_REPORT_CHANNEL.len() <= 1`). That second task +
+// per-report 4 ms tick + withholding gate was a pointer-ONLY baseline
+// latency the (smooth) SCROLL path never paid — the bulk of the "もっさり".
 //
-// The peripheral PMW3610 is polled at 2 kHz and emits one Joystick event
-// per non-zero sample. Every queue on the path to the host
-// (rmk `run_devices!`, `PeripheralManager::run`, EVENT_CHANNEL_SIZE = 16)
-// overflows with a **drop-oldest** policy — i.e. it discards motion
-// rather than summing it. Over USB the host drains HID reports at ~1 kHz
-// so the queues never back up and nothing is dropped. Fully wireless,
-// the central→host BLE HID link only drains at the connection interval
-// (~66–133 Hz, and lower while the single nRF radio also services the
-// split link), so the report queue backs up, `PointerProcessor` would
-// block on `send_report().await`, EVENT_CHANNEL fills, and a large
-// fraction of the trackball's travel is silently dropped → the cursor
-// under-travels and fast motion smears ("のっぺり").
-//
-// Fix: `PointerProcessor::process` no longer sends inline. It *sums*
-// each sample into these accumulators and returns immediately, so
-// EVENT_CHANNEL always drains and never drops. `run_pointer_flush`
-// emits the accumulated delta at whatever rate the host link can
-// actually accept — motion is now coalesced (summed), never discarded.
-static POINTER_ACCUM_X: AtomicI32 = AtomicI32::new(0);
-static POINTER_ACCUM_Y: AtomicI32 = AtomicI32::new(0);
-
-/// Wakes [`run_pointer_flush`] when fresh pointer delta has been
-/// accumulated. Latching `Signal` — a wake raised while the flush task
-/// is busy is remembered, so no motion edge is missed.
-static POINTER_PENDING: Signal<CriticalSectionRawMutex, ()> = Signal::new();
+// ZMK (KobitoKey, the smooth reference) forwards each pointer sample
+// straight through its input pipeline with NO coalescer task, and kobu's
+// own `ScrollProcessor` (confirmed ヌルヌル) likewise emits INLINE inside
+// `process()`. So `PointerProcessor::process` now emits inline too, using
+// the identical non-blocking `try_send` + `len()<=1` discipline as
+// ScrollProcessor, and the same CPI / MAX_PENDING math the old flush task
+// ran (moved into the processor via a per-instance `pend_*` carry). The
+// emit stays NON-BLOCKING, so `process()` still returns promptly and
+// EVENT_CHANNEL keeps draining — the old drop-oldest "のっぺり" protection
+// is preserved; we only removed the extra async hop and the 4 ms tick.
+// Source rate is now matched to the link (PMW3610 poll 8 ms ≈ ZMK
+// REPORT_INTERVAL_MIN, see build.rs), so the channel rarely backs up.
 
 /// Multiplier base for `config::trackball_cpi()`: 1000 = 1.0×.
 const CPI_DENOM: i32 = 1000;
@@ -318,80 +339,21 @@ const SCROLL_MAX_UNITS: i32 = 3;
 /// reports into a genuinely fast cursor — fast *and* responsive.
 const MAX_PENDING_MILLI: i32 = 254 * CPI_DENOM;
 
-/// Re-try / re-sample cadence while draining (≈250 Hz). Comfortably
-/// above any host BLE interval, so the channel's drain rate — not this
-/// timer — sets the real report rate.
-const FLUSH_TICK_MS: u64 = 4;
+/// Motion-freeze window after any mouse-button PRESS edge (click-shake guard).
+/// Pressing a layer-4 MouseBtn makes finger pressure incidentally roll the ball
+/// a few counts → the cursor jumps → misclick. For this long after a press edge,
+/// pointer motion is suppressed (the counts stay banked in `pend_*`, NOT dropped,
+/// so a genuine press-then-drag loses nothing — they emit the moment the freeze
+/// lapses). 40 ms covers the press transient and is imperceptible. Fires only on
+/// the press rising edge, never re-arming during a sustained hold, so click-drag
+/// is unaffected.
+const CLICK_FREEZE: Duration = Duration::from_millis(40);
 
-/// Drain the pointer accumulator to the host HID report channel.
-///
-/// Spawned alongside the processor chain on the central (see
-/// `src/central.rs`). Coalesces the 2 kHz PMW3610 stream into one HID
-/// report per host BLE interval, applying the live CPI multiplier from
-/// `config::trackball_cpi()` (tunable from kobu-config, Via Custom
-/// Channel 0xC0 id 0x01).
-///
-/// The emission is **non-blocking** (`try_send`) with a **bounded
-/// backlog**: if the report channel is full (host link behind), the
-/// unsent delta stays in `pend_*` and merges with new motion next tick
-/// instead of queuing more reports. `pend_*` is clamped to
-/// `MAX_PENDING_MILLI`, so motion that outruns the link is dropped
-/// rather than turned into a lag tail. This keeps the cursor responsive
-/// at any ball speed.
-pub async fn run_pointer_flush() {
-    // Owed travel in milli-counts (1000 = 1 HID count). Carrying it
-    // across ticks both preserves sub-count precision for a fractional
-    // CPI multiplier and lets a momentarily-full channel coalesce.
-    let mut pend_x: i32 = 0;
-    let mut pend_y: i32 = 0;
-    loop {
-        POINTER_PENDING.wait().await;
-        // Drain until nothing is owed, then sleep on the next motion.
-        loop {
-            let mult = config::trackball_cpi() as i32;
-            pend_x += POINTER_ACCUM_X.swap(0, Ordering::Relaxed) * mult;
-            pend_y += POINTER_ACCUM_Y.swap(0, Ordering::Relaxed) * mult;
-            // Drop travel beyond the backlog ceiling — no lag tail.
-            pend_x = pend_x.clamp(-MAX_PENDING_MILLI, MAX_PENDING_MILLI);
-            pend_y = pend_y.clamp(-MAX_PENDING_MILLI, MAX_PENDING_MILLI);
-
-            let dx = (pend_x / CPI_DENOM).clamp(-127, 127);
-            let dy = (pend_y / CPI_DENOM).clamp(-127, 127);
-            if dx == 0 && dy == 0 {
-                break;
-            }
-            let report = MouseReport {
-                // Carry the live held-button state (drag/copy fix): a bare
-                // buttons:0 here would release a button the user is holding
-                // while dragging. See config::mouse_buttons / build.rs.
-                buttons: config::mouse_buttons(),
-                x: dx as i8,
-                y: dy as i8,
-                wheel: 0,
-                pan: 0,
-            };
-            // Only feed the shared report channel when it has nearly
-            // drained (≤1 queued). `try_send` alone isn't enough: it
-            // succeeds until the 16-deep channel is *full*, which over a
-            // slow BLE link is ~120 ms of buffered pointer reports — the
-            // exact backlog that made fast rolls glide ("もっさり"). Gating
-            // on `len()` keeps at most ~2 reports in flight (~1–2 BLE
-            // intervals), so the cursor tracks the ball in real time and
-            // any motion the link can't take coalesces into pend_*.
-            if KEYBOARD_REPORT_CHANNEL.len() <= 1
-                && KEYBOARD_REPORT_CHANNEL
-                    .try_send(Report::MouseReport(report))
-                    .is_ok()
-            {
-                // Only consume what actually went out; an over-full
-                // channel leaves pend_* intact to coalesce next tick.
-                pend_x -= dx * CPI_DENOM;
-                pend_y -= dy * CPI_DENOM;
-            }
-            Timer::after_millis(FLUSH_TICK_MS).await;
-        }
-    }
-}
+/// Per-emit deadzone (in HID counts) applied ONLY while a mouse button is held:
+/// swallow ≤ this many counts of tremor so a held-button finger can't jitter the
+/// cursor, while a deliberate drag (which exceeds it) passes at full gain. At the
+/// ~1200 effective CPI (600 × 1.5×), 2 counts ≈ <0.05 mm.
+const HELD_DEADZONE: i32 = 2;
 
 /// Wraps an inner `InputDevice` and rewrites `Event::Joystick` axes
 /// X → H, Y → V. Used on the central side to tag locally-sourced
@@ -589,7 +551,9 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
 }
 
 /// Pointer processor. Matches Joystick events with X/Y axes (= RIGHT half,
-/// peripheral-forwarded, untouched) and emits MouseReport pointer motion.
+/// peripheral-forwarded, untouched) and emits MouseReport pointer motion
+/// INLINE (like `ScrollProcessor`), so the pointer no longer pays the extra
+/// flush-task hop + 4 ms tick that caused the baseline "もっさり".
 pub struct PointerProcessor<
     'a,
     const ROW: usize,
@@ -598,13 +562,33 @@ pub struct PointerProcessor<
     const NUM_ENCODER: usize,
 > {
     keymap: &'a RefCell<KeyMap<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>>,
+    /// Owed pointer travel in milli-counts (1000 = 1 HID count), carried
+    /// across events. Preserves sub-count precision for the fractional CPI
+    /// multiplier and lets a momentarily-full report channel coalesce instead
+    /// of queuing more reports. Clamped to `MAX_PENDING_MILLI` so motion that
+    /// outruns the link is dropped (no lag tail) — the same backlog discipline
+    /// the old `run_pointer_flush` used. Single-threaded executor, so this
+    /// per-instance state needs no atomics.
+    pend_x: i32,
+    pend_y: i32,
+    /// Last-seen HID button bitfield, for press (rising-edge) detection.
+    prev_buttons: u8,
+    /// Deadline until which pointer motion is suppressed after a button-press
+    /// edge (click-shake guard). `None` when not freezing.
+    freeze_until: Option<Instant>,
 }
 
 impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCODER: usize>
     PointerProcessor<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>
 {
     pub fn new(keymap: &'a RefCell<KeyMap<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>>) -> Self {
-        Self { keymap }
+        Self {
+            keymap,
+            pend_x: 0,
+            pend_y: 0,
+            prev_buttons: 0,
+            freeze_until: None,
+        }
     }
 }
 
@@ -634,22 +618,117 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                 if !matched {
                     return ProcessResult::Continue(event);
                 }
-                // Sum into the accumulator instead of emitting a report
-                // inline. Returning immediately (no `send_report().await`)
-                // keeps EVENT_CHANNEL draining so the central never hits
-                // the drop-oldest path that loses motion when the host
-                // BLE link is slow. `run_pointer_flush` turns the sum
-                // into HID reports at the host's pace. Negate Y so
-                // finger-up moves the cursor up (the right-half PMW3610
-                // is mounted mirrored, leaving Y inverted by default).
-                POINTER_ACCUM_X.fetch_add(x as i32, Ordering::Relaxed);
-                POINTER_ACCUM_Y.fetch_add(-(y as i32), Ordering::Relaxed);
-                POINTER_PENDING.signal(());
-                // Wake the status-LED controller so it can flash purple
-                // for the configured hold window. `Signal::signal` overwrites
-                // any pending value, which is fine — we only need the
-                // "something happened" edge, not a count.
+                // Diagnostic (feature led-conn-diag): count every peripheral
+                // pointer sample that REACHES the central — independent of the
+                // emit gate — so the status LED can show the split-link delivery
+                // rate. A のろのろ from split starvation shows as a low rate here.
+                if cfg!(feature = "led-conn-diag") {
+                    config::note_pointer_sample();
+                }
+                // Click-shake guard: detect a mouse-button PRESS rising edge and
+                // start a brief motion-freeze, so the incidental ball roll while
+                // pressing a layer-4 MouseBtn doesn't jump the cursor (misclick).
+                // Read the held-button state once and reuse it below.
+                let buttons = config::mouse_buttons();
+                let now = Instant::now();
+                if buttons & !self.prev_buttons != 0 {
+                    self.freeze_until = Some(now + CLICK_FREEZE);
+                }
+                self.prev_buttons = buttons;
+                // Emit the pointer report INLINE — exactly like ScrollProcessor
+                // (the already-smooth scroll path), no separate flush task and
+                // no 4 ms tick. ZMK forwards each pointer sample straight
+                // through; this mirrors that. The CPI multiply, MAX_PENDING
+                // clamp and ±127 clamp are the same math the old
+                // run_pointer_flush ran, moved here so feel/gain and the
+                // no-lag-tail behaviour are unchanged. Negate Y so finger-up
+                // moves the cursor up (the right-half PMW3610 is mounted
+                // mirrored, leaving Y inverted by default).
+                //
+                // `pend_*` (milli-counts) carries sub-count precision and lets
+                // a momentarily-full channel coalesce. The `len() <= 1` +
+                // non-blocking `try_send` keeps `process()` from ever blocking,
+                // so EVENT_CHANNEL keeps draining — the exact drop-oldest
+                // "のっぺり" protection the old accumulator was added for, now
+                // without the extra task hop / tick latency.
+                let mult = config::trackball_cpi() as i32;
+                self.pend_x += (x as i32) * mult;
+                self.pend_y += (-(y as i32)) * mult;
+                // Diagnostic (feature `led-conn-diag`, compiled out otherwise):
+                // count when accumulated travel exceeds the backlog ceiling and
+                // is about to be clamp-dropped — this is the "under-travel" loss
+                // that may be the のろのろ. The status LED flashes white when it
+                // fires, so the user can tell dropped-travel from a slow link.
+                if cfg!(feature = "led-conn-diag")
+                    && (self.pend_x.abs() > MAX_PENDING_MILLI
+                        || self.pend_y.abs() > MAX_PENDING_MILLI)
+                {
+                    config::note_motion_dropped();
+                }
+                self.pend_x = self.pend_x.clamp(-MAX_PENDING_MILLI, MAX_PENDING_MILLI);
+                self.pend_y = self.pend_y.clamp(-MAX_PENDING_MILLI, MAX_PENDING_MILLI);
+                let mut dx = (self.pend_x / CPI_DENOM).clamp(-127, 127);
+                let mut dy = (self.pend_y / CPI_DENOM).clamp(-127, 127);
+                // Click-shake suppression. pend_* is NOT consumed when suppressed
+                // (consume only happens on a successful send below), so banked
+                // travel survives — a real move begun during the freeze emits the
+                // instant it lapses; only the incidental press-shake is swallowed.
+                if matches!(self.freeze_until, Some(t) if now < t) {
+                    // Within the press-edge freeze window: suppress all motion.
+                    dx = 0;
+                    dy = 0;
+                } else if buttons != 0 && dx.abs() <= HELD_DEADZONE && dy.abs() <= HELD_DEADZONE {
+                    // Button held + sub-deadzone tremor: swallow it. A deliberate
+                    // drag exceeds HELD_DEADZONE and passes through at full gain.
+                    dx = 0;
+                    dy = 0;
+                }
+                if dx != 0 || dy != 0 {
+                    let report = MouseReport {
+                        // Carry the live held-button state (drag/copy fix): a
+                        // bare buttons:0 would release a button held while
+                        // dragging. See config::mouse_buttons / build.rs.
+                        buttons,
+                        x: dx as i8,
+                        y: dy as i8,
+                        wheel: 0,
+                        pan: 0,
+                    };
+                    // Emit only when the shared HID channel is EMPTY, keeping
+                    // exactly ONE pointer report in flight. Was `len() <= 1`
+                    // (up to 2 queued = ~2 host intervals ≈ 30 ms of buffer
+                    // latency); the central→macOS link is confirmed healthy
+                    // (host steady ~15 ms, samples arriving fine), so the residual
+                    // のろのろ is this emit-queue lag. `== 0` keeps 1-in-flight
+                    // (~1 host interval ≈ 15 ms), matching ZMK's freshest-report-
+                    // per-connection-event behaviour, and the unsent motion still
+                    // coalesces losslessly into pend_*. At ~125 samples/s the
+                    // writer never starves (an arrival refills within ~8 ms), so
+                    // throughput stays at the host rate while latency halves.
+                    if KEYBOARD_REPORT_CHANNEL.len() == 0
+                        && KEYBOARD_REPORT_CHANNEL
+                            .try_send(Report::MouseReport(report))
+                            .is_ok()
+                    {
+                        // Consume only what actually went out; a non-empty
+                        // channel leaves pend_* to coalesce on the next event.
+                        self.pend_x -= dx * CPI_DENOM;
+                        self.pend_y -= dy * CPI_DENOM;
+                    }
+                }
+                // Wake the status-LED controller so it can flash purple for the
+                // configured hold window. `Signal::signal` overwrites any
+                // pending value — we only need the "something happened" edge.
                 PERIPHERAL_ACTIVITY.signal(());
+                // Keep the auto-mouse layer alive whenever ANY pointer sample
+                // ARRIVES — not only on a successful emit (the old placement),
+                // and not only on raw non-zero motion (that's AUTO_MOUSE_ACTIVITY
+                // below). This covers sub-count creep, suppressed (freeze/dead-
+                // zone) ticks, and a momentarily-full channel — the exact cases
+                // the send-gated keep-alive missed, which dropped the layer mid-
+                // mouse. HOLD only; ACTIVATION still keys off AUTO_MOUSE_ACTIVITY
+                // + travel + prior-idle, so typing-after-mousing stays safe.
+                AUTO_MOUSE_KEEPALIVE.signal(());
                 // Arm / refresh the auto mouse layer, but only on real motion so
                 // idle polling can't trap the user on the mouse layer. Bank
                 // gross travel (|dx|+|dy| in raw 800-CPI counts) so the
@@ -707,7 +786,16 @@ pub async fn run_input_gate_central() {
     // the link (no reset). Require host_connected to hold for SETTLE_MS first,
     // so the burst drains and host TX credits are flowing before the trackball
     // is admitted. Resets on disconnect so a stale resume re-arms cleanly.
-    const SETTLE_MS: u64 = 2000;
+    //
+    // kobu: lowered 2000 -> 1000 to cut the 起動時もっさり (the pointer was dead
+    // ~2 s after every connect). 1000 ms still spans the dense stale-resume GATT
+    // cache-revalidation burst because set_conn_params (ble/mod.rs) spends
+    // 300+300 ms before the fast params land, so the trackball is still admitted
+    // only after host TX credits flow — and the PMW3610 poll is now 8 ms (4x
+    // less flood than the 2 ms that caused the wedge), so 1 s here is safer than
+    // 2 s was at 500 Hz. If a stale-reconnect-while-moving wedge ever recurs,
+    // raise back toward 1500-2000.
+    const SETTLE_MS: u64 = 1000;
     // Backstop for a session with NO host at all (no BLE + no USB) so the balls
     // aren't dead forever. Far longer than any real connect+settle, so it never
     // pre-empts the settle path during the dangerous bring-up window.

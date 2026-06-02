@@ -14,7 +14,6 @@ mod keyboard_central {
     use crate::status_led::StatusLedController;
     use crate::trackball::{
         AxisRelabel, PointerProcessor, ScrollProcessor, run_auto_mouse_layer, run_input_gate_central,
-        run_pointer_flush,
     };
 
     // Status LED controller declared via the `rmk_macro` controller
@@ -117,20 +116,17 @@ mod keyboard_central {
             ::rmk::embassy_futures::join::join(
                 ::rmk::embassy_futures::join::join(
                     status_led.polling_loop(),
-                    ::rmk::embassy_futures::join::join(
-                        // Drain the coalesced pointer accumulator to the host at
-                        // the BLE report rate. Decouples the PMW3610 event rate
-                        // from the slower wireless HID link so trackball motion
-                        // is summed, not dropped. See src/trackball.rs.
-                        run_pointer_flush(),
-                        // Round 8 boot-trackball wedge fix: hold the PMW3610
-                        // pipeline (both halves) OFF until the host link is READY
-                        // (BLE-encrypted or USB), so motion can't stall the Mac
-                        // SMP/encryption bring-up. Drives KOBU_INPUT_GATED +
-                        // KOBU_HOST_READY (→ peripheral via HostReady). See
-                        // src/trackball.rs::run_input_gate_central.
-                        run_input_gate_central(),
-                    ),
+                    // Round 8 boot-trackball wedge fix: hold the PMW3610
+                    // pipeline (both halves) OFF until the host link is READY
+                    // (BLE-encrypted or USB), so motion can't stall the Mac
+                    // SMP/encryption bring-up. Drives KOBU_INPUT_GATED +
+                    // KOBU_HOST_READY (→ peripheral via HostReady). See
+                    // src/trackball.rs::run_input_gate_central.
+                    //
+                    // Pointer reports are now emitted INLINE by PointerProcessor
+                    // (like ScrollProcessor), so the old run_pointer_flush drain
+                    // task is gone — this leaf used to be join(flush, gate).
+                    run_input_gate_central(),
                 ),
                 // Auto mouse layer: switch to layer 4 while the right-half
                 // trackball is moving, fall back after an idle window. Shares
