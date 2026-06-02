@@ -70,6 +70,16 @@ xz2 = "0.1.7"
 json = "0.12"
 const-gen = "1.6"
 
+[features]
+# Temporary on-device diagnostic for the pointer-のろのろ investigation: makes
+# the central status LED show the live macOS host BLE connection interval as a
+# color band (green ≤9ms / blue ~11ms / purple ~15ms / red ≥20ms) and flash
+# WHITE when pointer travel is clamp-dropped. Build the diagnostic UF2 with
+# `--features led-conn-diag`; the normal build omits it (battery/layer LED
+# unchanged). All diag code is `if cfg!(feature = "led-conn-diag")`-gated so the
+# normal binary is byte-for-byte unaffected.
+led-conn-diag = []
+
 [[bin]]
 name = "central"
 path = "src/central.rs"

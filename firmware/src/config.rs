@@ -27,9 +27,9 @@ use core::sync::atomic::Ordering;
 use embassy_nrf::pac;
 use embassy_time::Duration;
 use rmk::input_device::battery::{
-    KOBU_HOST_CONNECTED, KOBU_LAST_KEY_TICKS, KOBU_MOUSE_BUTTONS, KOBU_SCROLL_INVERT_X,
-    KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_THROTTLE_MS, KOBU_STATUS_LED_BAT_HIGH, KOBU_STATUS_LED_BAT_LOW,
-    KOBU_STATUS_LED_PURPLE_HOLD_MS, KOBU_TRACKBALL_CPI,
+    KOBU_HOST_CONN_INTERVAL_US, KOBU_HOST_CONNECTED, KOBU_LAST_KEY_TICKS, KOBU_MOUSE_BUTTONS,
+    KOBU_SCROLL_INVERT_X, KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_THROTTLE_MS, KOBU_STATUS_LED_BAT_HIGH,
+    KOBU_STATUS_LED_BAT_LOW, KOBU_STATUS_LED_PURPLE_HOLD_MS, KOBU_TRACKBALL_CPI,
 };
 
 /// Ordering used for all reads / writes here. `Relaxed` is correct
@@ -176,4 +176,67 @@ pub fn status_led_battery_high_threshold() -> u8 {
 
 pub fn status_led_battery_low_threshold() -> u8 {
     KOBU_STATUS_LED_BAT_LOW.load(ORD)
+}
+
+// ─── Connection-interval diagnostic (feature `led-conn-diag`) ────────
+//
+// Temporary on-device diagnostic for the pointer-のろのろ investigation. With
+// the feature on, the status LED (src/status_led.rs) shows the live macOS host
+// BLE connection interval as a color band and flashes white when pointer travel
+// is clamp-dropped, so the user can read — during a のろのろ moment — whether the
+// host link is slow (purple/red) or motion is being dropped at a fast link
+// (white over green/blue). These helpers are always defined (the diag call
+// sites are `if cfg!(feature = "led-conn-diag")`-gated and eliminated from the
+// normal build), so the firmware compiles identically with or without it.
+
+/// Live macOS host BLE connection interval in microseconds (0 until the first
+/// ConnectionParamsUpdated). Mirrors rmk's atomic populated by the patched gatt
+/// task on every conn-param change. Read by the LED diagnostic band.
+/// `allow(dead_code)`: only referenced under `cfg!(feature = "led-conn-diag")`.
+#[allow(dead_code)]
+pub fn host_conn_interval_us() -> u32 {
+    KOBU_HOST_CONN_INTERVAL_US.load(ORD)
+}
+
+/// Diagnostic clamp-drop counter — incremented by `trackball.rs` each time
+/// accumulated pointer travel exceeds the backlog ceiling (MAX_PENDING_MILLI)
+/// and is about to be clamp-dropped (the under-travel that may cause のろのろ).
+#[allow(dead_code)]
+pub static KOBU_MOTION_DROPPED: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
+/// Note one clamp-drop of pointer travel (diagnostic; called from trackball.rs).
+#[allow(dead_code)]
+pub fn note_motion_dropped() {
+    KOBU_MOTION_DROPPED.fetch_add(1, ORD);
+}
+
+/// Read-and-reset the diagnostic clamp-drop counter. The status LED calls this
+/// each 50 ms tick; a non-zero result flashes the LED white for that tick.
+#[allow(dead_code)]
+pub fn take_motion_dropped() -> u32 {
+    KOBU_MOTION_DROPPED.swap(0, ORD)
+}
+
+/// Diagnostic split-sample ARRIVAL counter — incremented in trackball.rs
+/// PointerProcessor::process on every peripheral Joystick(X/Y) event that
+/// REACHES the central, independent of the emit gate. The status LED windows it
+/// into a samples/sec rate so a のろのろ caused by the SPLIT link starving the
+/// central of pointer samples shows up as a low rate (the host-interval band
+/// could not see it). Only used under `led-conn-diag`.
+#[allow(dead_code)]
+pub static KOBU_POINTER_SAMPLES: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
+/// Note one pointer sample arriving at the central (diagnostic).
+#[allow(dead_code)]
+pub fn note_pointer_sample() {
+    KOBU_POINTER_SAMPLES.fetch_add(1, ORD);
+}
+
+/// Read-and-reset the diagnostic pointer-sample arrival counter (the status LED
+/// windows this into a samples/sec rate band).
+#[allow(dead_code)]
+pub fn take_pointer_samples() -> u32 {
+    KOBU_POINTER_SAMPLES.swap(0, ORD)
 }

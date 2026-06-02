@@ -125,6 +125,15 @@ pub struct StatusLedController<'d> {
     /// Instant after which the boot battery indication stops.
     boot_until: Instant,
     current: Color,
+    /// Diagnostic (led-conn-diag) split-sample-arrival-rate window state:
+    /// arrivals accumulated in the current window, the last computed per-second
+    /// rate, and when the window started. Unused in the normal build.
+    #[allow(dead_code)]
+    samples_accum: u32,
+    #[allow(dead_code)]
+    last_rate: u32,
+    #[allow(dead_code)]
+    window_start: Instant,
 }
 
 impl<'d> StatusLedController<'d> {
@@ -142,6 +151,9 @@ impl<'d> StatusLedController<'d> {
             // scope after embassy init, so the time driver is live).
             boot_until: Instant::now() + BOOT_BATTERY_WINDOW,
             current: Color::Off,
+            samples_accum: 0,
+            last_rate: 0,
+            window_start: Instant::now(),
         }
     }
 
@@ -166,6 +178,53 @@ impl<'d> StatusLedController<'d> {
         } else {
             Color::Off
         }
+    }
+
+    /// Diagnostic LED (feature `led-conn-diag`): show the live macOS host BLE
+    /// connection interval as a color band, and flash WHITE for one tick
+    /// whenever pointer travel was clamp-dropped since the last tick. Lets the
+    /// user read, during a のろのろ moment, whether the host link is slow
+    /// (purple/red band) or motion is being dropped at a fast link (white
+    /// flashes over a green/blue band), or neither (clean fast band + no white
+    /// + still のろのろ ⇒ the split link is starved). Only called from
+    /// `update()`/`process_event()` under `if cfg!(feature = "led-conn-diag")`.
+    /// Diagnostic LED (feature `led-conn-diag`): show the SPLIT-LINK pointer-
+    /// sample ARRIVAL RATE at the central (samples/sec, windowed ~500 ms). The
+    /// host-interval band (round 20) was the wrong variable — the host link is
+    /// constant ~15 ms while のろのろ is intermittent, so のろのろ is upstream on
+    /// the split. This shows it: GREEN = link keeping up, RED = starved.
+    ///   White  : a central clamp-drop happened (would mean fast-but-dropping,
+    ///            distinct from starvation) — kept top priority.
+    ///   Off    : rate 0 = idle / not mousing (band only means something moving).
+    ///   Green  : >80/s  (a continuous 8 ms move tops ~125/s; >80/s = healthy).
+    ///   Yellow : 30..=80/s (degraded delivery).
+    ///   Red    : 1..=29/s (samples arriving but far below source → SPLIT STARVATION).
+    #[allow(dead_code)]
+    fn diag_apply(&mut self) {
+        // Round 24 verify: show the LIVE HOST (macOS) conn interval, to confirm
+        // whether the request-once fix made macOS HOLD the link fast, or it is
+        // still relaxing. (Split arrival is already confirmed fine = green.)
+        //   Green ≤9ms (>111Hz) · Blue ≤12ms (~11.25ms) · Purple ≤20ms (~15ms,
+        //   66Hz) · Red >20ms (relaxed = host still slipping) · Yellow = no data.
+        // Keep the white clamp-drop flash as the top-priority signal.
+        let _ = config::take_pointer_samples(); // drain so it doesn't accumulate
+        let color = if config::take_motion_dropped() > 0 {
+            Color::White
+        } else {
+            let us = config::host_conn_interval_us();
+            if us == 0 {
+                Color::Yellow
+            } else if us <= 9_000 {
+                Color::Green
+            } else if us <= 12_000 {
+                Color::Blue
+            } else if us <= 20_000 {
+                Color::Purple
+            } else {
+                Color::Red
+            }
+        };
+        self.apply(color);
     }
 
     fn apply(&mut self, color: Color) {
@@ -214,8 +273,14 @@ impl<'d> Controller for StatusLedController<'d> {
                 self.layer = layer;
             }
         }
-        let color = self.target_color();
-        self.apply(color);
+        if cfg!(feature = "led-conn-diag") {
+            // Diagnostic mode: the host-interval band is driven by update()
+            // every 50ms; battery/layer events do not repaint the LED.
+            self.diag_apply();
+        } else {
+            let color = self.target_color();
+            self.apply(color);
+        }
     }
 
     /// Wait for a relevant `ControllerEvent` on `CONTROLLER_CHANNEL`. We act on
@@ -240,7 +305,11 @@ impl<'d> PollingController for StatusLedController<'d> {
     const INTERVAL: Duration = Duration::from_millis(50);
 
     async fn update(&mut self) {
-        let color = self.target_color();
-        self.apply(color);
+        if cfg!(feature = "led-conn-diag") {
+            self.diag_apply();
+        } else {
+            let color = self.target_color();
+            self.apply(color);
+        }
     }
 }

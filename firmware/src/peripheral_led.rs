@@ -92,6 +92,14 @@ pub struct PeripheralLedController<'d> {
     boot_until: Instant,
     blue_until: Instant,
     current: Color,
+    /// Diagnostic (led-conn-diag): pointer-production-rate window state — unused
+    /// in the normal build.
+    #[allow(dead_code)]
+    samples_accum: u32,
+    #[allow(dead_code)]
+    last_rate: u32,
+    #[allow(dead_code)]
+    window_start: Instant,
 }
 
 impl<'d> PeripheralLedController<'d> {
@@ -108,6 +116,9 @@ impl<'d> PeripheralLedController<'d> {
             boot_until: Instant::now() + BOOT_BATTERY_WINDOW,
             blue_until: Instant::now(),
             current: Color::Off,
+            samples_accum: 0,
+            last_rate: 0,
+            window_start: Instant::now(),
         }
     }
 
@@ -129,6 +140,34 @@ impl<'d> PeripheralLedController<'d> {
                 Color::Red
             }
         }
+    }
+
+    /// Diagnostic (feature `led-conn-diag`): show this peripheral's pointer
+    /// PRODUCTION rate (samples/sec from the RIGHT PMW3610, windowed ~500 ms),
+    /// to compare against the central's ARRIVAL-rate LED. If THIS LED is GREEN
+    /// (sensor producing ~125/s) but the central LED is RED (receiving few) →
+    /// the loss is split TRANSIT. If THIS LED is also RED → the sensor itself is
+    /// producing too few samples (production). Off = not mousing.
+    ///   Off : 0/s (idle) · Green: >80/s · Yellow: 30–80/s · Red: 1–29/s.
+    #[allow(dead_code)]
+    fn diag_apply(&mut self) {
+        self.samples_accum +=
+            rmk::input_device::battery::KOBU_PERIPHERAL_SAMPLES.swap(0, Ordering::Relaxed);
+        if Instant::now() - self.window_start >= Duration::from_millis(500) {
+            self.last_rate = self.samples_accum * 2; // 500 ms window → per-second
+            self.samples_accum = 0;
+            self.window_start = Instant::now();
+        }
+        let color = if self.last_rate == 0 {
+            Color::Off
+        } else if self.last_rate > 80 {
+            Color::Green
+        } else if self.last_rate >= 30 {
+            Color::Yellow
+        } else {
+            Color::Red
+        };
+        self.apply(color);
     }
 
     fn apply(&mut self, color: Color) {
@@ -183,8 +222,12 @@ impl<'d> Controller for PeripheralLedController<'d> {
                 self.connected = false;
             }
         }
-        let color = self.target_color();
-        self.apply(color);
+        if cfg!(feature = "led-conn-diag") {
+            self.diag_apply();
+        } else {
+            let color = self.target_color();
+            self.apply(color);
+        }
     }
 
     /// Act only on `Battery` (boot colour) and `SplitCentral` (connected/lost);
@@ -206,7 +249,11 @@ impl<'d> PollingController for PeripheralLedController<'d> {
     const INTERVAL: Duration = Duration::from_millis(50);
 
     async fn update(&mut self) {
-        let color = self.target_color();
-        self.apply(color);
+        if cfg!(feature = "led-conn-diag") {
+            self.diag_apply();
+        } else {
+            let color = self.target_color();
+            self.apply(color);
+        }
     }
 }
