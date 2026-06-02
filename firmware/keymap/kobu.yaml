@@ -34,7 +34,7 @@ layers:
     - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, Del, {t: ▽, type: trans}, {type: held}, {t: ▽, type: trans}]
   マウス:
     - [前タブ, 次タブ, '', '', '', 左クリック, 右クリック, 右クリック, 中クリック, {t: ▽, type: trans}]
-    - [{t: 戻る, h: Shift}, 進む, '', '', '', '', '', '', '', {t: ▽, type: trans}]
+    - [{t: 戻る, h: Shift}, 進む, Tab, Cmd, '', '', '', '', '', {t: ▽, type: trans}]
     - [Ctrl, '', コピー, ペースト, '', '', '', '', '', {t: ▽, type: trans}]
     - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
   Emacs:
