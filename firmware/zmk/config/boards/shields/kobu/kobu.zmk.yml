@@ -1,0 +1,9 @@
+file_format: "1"
+id: kobu
+name: kobu
+type: shield
+url: https://github.com/s-katada/kobu
+requires: [seeeduino_xiao_ble]
+features:
+  - keys
+  - pointer

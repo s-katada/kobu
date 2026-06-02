@@ -1,0 +1,119 @@
+/*
+ * kobu LEFT half = central.
+ *
+ *   - Local PMW3610 (tb_left) drives SCROLL. kobu scrolls on the HORIZONTAL
+ *     roll only (vertical killed), calm (~1 wheel line per ~1 mm at 600 cpi),
+ *     matching firmware/rmk/src/trackball.rs ScrollProcessor (SCROLL_STEP=30,
+ *     horizontal-only, roll-right = scroll-up).
+ *   - Consumes the RIGHT half's forwarded pointer via tb_right_listener and
+ *     runs the auto-mouse temp-layer (layer 4) on it (matches the RMK
+ *     run_auto_mouse_layer: AUTO_MOUSE_LAYER=4, TIMEOUT=150ms, PRIOR_IDLE=300ms).
+ *
+ * SPI (3-wire PMW3610): SCLK=P0_03(D1), SDIO(MOSI=MISO)=P0_02(D0), CS=P0_09(NFC1).
+ * The badjeff driver requires irq-gpios -> wire MOTION=P0_28(D2). (The RMK
+ * firmware polls and ignores MOTION, but the line is physically present.)
+ */
+
+#include "kobu.dtsi"
+#include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <input/processors.dtsi>
+#include <dt-bindings/zmk/input_transform.h>
+
+&xiao_serial { status = "disabled"; };
+
+&pinctrl {
+    spi0_default: spi0_default {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK,  0, 3)>,
+                    <NRF_PSEL(SPIM_MOSI, 0, 2)>,
+                    <NRF_PSEL(SPIM_MISO, 0, 2)>;
+        };
+    };
+    spi0_sleep: spi0_sleep {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK,  0, 3)>,
+                    <NRF_PSEL(SPIM_MOSI, 0, 2)>,
+                    <NRF_PSEL(SPIM_MISO, 0, 2)>;
+            low-power-enable;
+        };
+    };
+};
+
+&spi0 {
+    status = "okay";
+    compatible = "nordic,nrf-spim";
+    pinctrl-0 = <&spi0_default>;
+    pinctrl-1 = <&spi0_sleep>;
+    pinctrl-names = "default", "sleep";
+    cs-gpios = <&gpio0 9 GPIO_ACTIVE_LOW>;   /* P0_09 (NFC1) = NCS */
+
+    tb_left: trackball@0 {
+        status = "okay";
+        compatible = "pixart,pmw3610";
+        reg = <0>;
+        spi-max-frequency = <2000000>;
+        irq-gpios = <&gpio0 28 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;  /* P0_28 = MOTION (D2) */
+        cpi = <600>;          /* kobu keyboard.toml (NOT KobitoKey's 700) */
+        force-awake;          /* = RMK force_awake=true (continuous tracking) */
+
+        evt-type = <INPUT_EV_REL>;
+        x-input-code = <INPUT_REL_X>;
+        y-input-code = <INPUT_REL_Y>;
+    };
+};
+
+/ {
+    /* Map the LEFT ball's HORIZONTAL roll (REL_X) onto the VERTICAL wheel
+     * (REL_WHEEL), reproducing RMK's "horizontal roll -> MouseReport.wheel".
+     * (The standard zip_xy_to_scroll_mapper sends X to HWHEEL = horizontal
+     * pan, which is the wrong axis for kobu.) */
+    zip_x_to_wheel_mapper: zip_x_to_wheel_mapper {
+        compatible = "zmk,input-processor-code-mapper";
+        #input-processor-cells = <0>;
+        type = <INPUT_EV_REL>;
+        map = <INPUT_REL_X INPUT_REL_WHEEL>;
+    };
+
+    /* Auto-mouse layer (RIGHT ball). layer=4, idle-deactivate=150ms,
+     * require-prior-idle=300ms. Pressing keys NOT in excluded-positions drops
+     * the layer; the excluded set keeps the layer alive for everything you use
+     * WHILE mousing (the layer-4 mouse buttons + the command keys kobu added
+     * for cmd-tab-while-mousing + all thumbs), so only reaching back to type a
+     * letter (or the 150ms idle) ends it. */
+    /omit-if-no-ref/ zip_temp_layer: zip_temp_layer {
+        compatible = "zmk,input-processor-temp-layer";
+        #input-processor-cells = <2>;
+        require-prior-idle-ms = <300>;
+    };
+};
+
+&tb_left_listener {
+    status = "okay";
+    device = <&tb_left>;
+    input-processors =
+        <&zip_y_scaler 0 1>,             /* kill vertical (scroll is horizontal-only) */
+        <&zip_x_to_wheel_mapper>,        /* horizontal roll -> vertical wheel          */
+        <&zip_scroll_scaler 1 30>;       /* ~30 raw counts / wheel line (= SCROLL_STEP) */
+        /* Direction: roll-right = scroll-up by default (matches RMK
+         * scroll_invert_x=false). If a bench test scrolls the wrong way, add
+         * <&zip_scroll_transform INPUT_TRANSFORM_Y_INVERT> to this list. */
+};
+
+&tb_right_listener {
+    status = "okay";
+    input-processors = <&zip_temp_layer 4 150>;
+};
+
+&zip_temp_layer {
+    /* positions (row*10+col): layer-4 mouse buttons 5,6,7,8; layer-4 command
+     * keys 0,1,10,11,12,13,20,22,23 (brackets, TD2, Tab, LGui, LCtrl, C, V);
+     * all thumbs 30..39. Everything else (transparent letter columns) ends the
+     * mouse layer when pressed = "back to typing". */
+    excluded-positions = <
+        0  1
+        5  6  7  8
+        10 11 12 13
+        20 22 23
+        30 31 32 33 34 35 36 37 38 39
+    >;
+};

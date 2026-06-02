@@ -1,0 +1,86 @@
+/*
+ * kobu RIGHT half = peripheral.
+ *
+ *   - Occupies cols 5..9 of the unified layout (col-offset = 5) and uses the
+ *     RIGHT column order [P1_12, P1_13, P1_14, P1_15, P0_10] (kobu's two halves
+ *     are wired differently so the unified keymap is canonical QWERTY).
+ *   - Local PMW3610 (tb_right) drives the POINTER. kobu inverts Y (finger-up =
+ *     cursor-up) and applies a ~1.5x software gain (RMK KOBU_TRACKBALL_CPI=1500
+ *     over the 600-cpi sensor). Both are realized on the split node so the
+ *     central receives already-corrected deltas; the auto-mouse temp-layer runs
+ *     on the central (kobu_left.overlay).
+ *
+ * SPI pins identical to the left half (both XIAO boards are wired the same).
+ */
+
+#include <zephyr/dt-bindings/pinctrl/nrf-pinctrl.h>
+#include "kobu.dtsi"
+#include <input/processors.dtsi>
+#include <dt-bindings/zmk/input_transform.h>
+
+/* Right half occupies cols 5..9. */
+&default_transform { col-offset = <5>; };
+
+/* Override kscan cols to the RIGHT (natural) order. Inputs => active-high +
+ * pull-down (row2col). This REPLACES the left order from kobu.dtsi. */
+&kscan0 {
+    col-gpios
+        = <&xiao_d  7 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>  /* P1_12  col5 */
+        , <&xiao_d  8 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>  /* P1_13  col6 */
+        , <&xiao_d  9 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>  /* P1_14  col7 */
+        , <&xiao_d 10 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>  /* P1_15  col8 */
+        , <&gpio0  10 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>; /* P0_10  col9 */
+};
+
+&xiao_serial { status = "disabled"; };
+
+&pinctrl {
+    spi0_default_r: spi0_default_r {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK,  0, 3)>,
+                    <NRF_PSEL(SPIM_MOSI, 0, 2)>,
+                    <NRF_PSEL(SPIM_MISO, 0, 2)>;
+        };
+    };
+    spi0_sleep_r: spi0_sleep_r {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK,  0, 3)>,
+                    <NRF_PSEL(SPIM_MOSI, 0, 2)>,
+                    <NRF_PSEL(SPIM_MISO, 0, 2)>;
+            low-power-enable;
+        };
+    };
+};
+
+&spi0 {
+    status = "okay";
+    compatible = "nordic,nrf-spim";
+    pinctrl-0 = <&spi0_default_r>;
+    pinctrl-1 = <&spi0_sleep_r>;
+    pinctrl-names = "default", "sleep";
+    cs-gpios = <&gpio0 9 GPIO_ACTIVE_LOW>;
+
+    tb_right: trackball@0 {
+        status = "okay";
+        compatible = "pixart,pmw3610";
+        reg = <0>;
+        spi-max-frequency = <2000000>;
+        irq-gpios = <&gpio0 28 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;  /* P0_28 = MOTION (D2) */
+        cpi = <600>;          /* sensor stays at 600; the 1.5x gain is applied below */
+        force-awake;
+
+        evt-type = <INPUT_EV_REL>;
+        x-input-code = <INPUT_REL_X>;
+        y-input-code = <INPUT_REL_Y>;
+    };
+};
+
+&tb_right_split {
+    device = <&tb_right>;
+    /* Run on the peripheral before transmission: 1.5x gain (= RMK
+     * KOBU_TRACKBALL_CPI 1500/1000) then invert Y (finger-up = cursor-up). X is
+     * NOT inverted (RMK negates only Y). No sensor rotation (kobu raw axes). */
+    input-processors =
+        <&zip_xy_scaler 3 2>,
+        <&zip_xy_transform INPUT_TRANSFORM_Y_INVERT>;
+};

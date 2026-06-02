@@ -1,0 +1,24 @@
+# Left = central
+if SHIELD_KOBU_LEFT
+
+config ZMK_KEYBOARD_NAME
+    default "kobu"
+
+config ZMK_SPLIT_ROLE_CENTRAL
+    default y
+
+endif
+
+# Both halves
+if SHIELD_KOBU_LEFT || SHIELD_KOBU_RIGHT
+
+config ZMK_SPLIT
+    default y
+
+config ZMK_POINTING
+    default y
+
+config SPI
+    default y
+
+endif
