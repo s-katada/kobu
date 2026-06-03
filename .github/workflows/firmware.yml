@@ -5,12 +5,14 @@ on:
     branches: [main]
     paths:
       - "firmware/rmk/**"
+      - "firmware/zmk/**"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/firmware.yml"
   pull_request:
     paths:
       - "firmware/rmk/**"
+      - "firmware/zmk/**"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/firmware.yml"
@@ -21,7 +23,7 @@ permissions:
 
 jobs:
   build:
-    name: Build UF2
+    name: Build RMK + ZMK UF2s
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,19 +35,33 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: firmware/rmk -> target
-          # Bust the cache when the nix-pinned toolchain changes.
-          # Without this, a `flake.lock` bump can leave cached
-          # build-script binaries linking to stale /nix/store paths
-          # and fail the build with "No such file or directory".
-          key: ${{ hashFiles('flake.lock') }}
+          # Bust the cache when the nix-pinned toolchain OR the rmk source
+          # patches change. build.rs patches the rmk crate's registry source
+          # in place; a stale cache that still holds rmk compiled from an older
+          # patch set (keyed only on flake.lock) is exactly what used to make
+          # this job fail with "no `KOBU_*` in input_device::battery". Hashing
+          # build.rs + keyboard.toml forces a clean registry on any patch change.
+          key: ${{ hashFiles('flake.lock', 'firmware/rmk/build.rs', 'firmware/rmk/keyboard.toml') }}
 
       - name: Install cargo-hex-to-uf2
         run: nix develop .#firmware --command cargo install --locked cargo-hex-to-uf2
 
-      - name: Build central and peripheral
+      # ── RMK firmware (firmware/rmk, Rust) ───────────────────────────────────
+      - name: Build RMK central and peripheral
         run: |
           nix develop .#firmware --command bash -eux <<'EOF'
           cd firmware/rmk
+          # kobu's build.rs patches the `rmk` crate's REGISTRY SOURCE in place
+          # (adds the KOBU_* atomics/consts, makes Keymap::{activate,deactivate}_layer
+          # pub, BLE tweaks, …). But cargo compiles the rmk dependency BEFORE running
+          # our build.rs and treats the registry source as immutable, so on a
+          # pristine CI registry the first build compiles rmk UNPATCHED and kobu
+          # then fails to resolve the injected symbols. The fix mirrors the local
+          # `cargo clean --release -p rmk` workflow: one throwaway build to let
+          # build.rs apply the (idempotent) patches, then force rmk to recompile
+          # from the now-patched source, then build for real.
+          cargo build --release --bin central || true
+          cargo clean --release -p rmk
           cargo build --release --bin central
           cargo build --release --bin peripheral
           cargo objcopy --release --bin central    -- -O ihex central.hex
@@ -55,23 +71,16 @@ jobs:
           EOF
 
       # Build a second pair of UF2s with `clear_layout = true` in
-      # keyboard.toml's [storage] section. Flashing these once makes
-      # the firmware wipe the user keymap (preserving BLE bonds) on the
-      # next boot. The web installer's "clean install" pairs this with
-      # a second flash of the normal UF2 to leave the device in a
-      # functional state where customisation can persist again.
-      #
-      # We `touch` the source so cargo re-expands the rmk_central /
-      # rmk_peripheral proc-macros that embed keyboard.toml — without
-      # this, the cached macro output would silently keep
-      # clear_layout=false in the produced binary.
-      - name: Build factory-reset central and peripheral
+      # keyboard.toml's [storage] section. Flashing these once makes the firmware
+      # wipe the user keymap (preserving BLE bonds) on the next boot. We `touch`
+      # the source so cargo re-expands the rmk_central / rmk_peripheral
+      # proc-macros that embed keyboard.toml. (rmk is already patched+compiled
+      # from the step above, so no second clean is needed here.)
+      - name: Build RMK factory-reset central and peripheral
         run: |
           nix develop .#firmware --command bash -eux <<'EOF'
           cd firmware/rmk
           sed -i 's/^clear_layout = false$/clear_layout = true/' keyboard.toml
-          # Verify the swap actually happened so we don't silently ship
-          # an incorrectly-built reset UF2.
           grep -q '^clear_layout = true$' keyboard.toml
           touch src/central.rs src/peripheral.rs
           cargo build --release --bin central
@@ -80,12 +89,22 @@ jobs:
           cargo objcopy --release --bin peripheral -- -O ihex peripheral-reset.hex
           cargo hex-to-uf2 --input-path central-reset.hex    --output-path central-reset.uf2    --family nrf52840
           cargo hex-to-uf2 --input-path peripheral-reset.hex --output-path peripheral-reset.uf2 --family nrf52840
-          # Restore the source tree so subsequent steps see a clean
-          # repo. (No-op on ephemeral runners but kept for hygiene.)
           sed -i 's/^clear_layout = true$/clear_layout = false/' keyboard.toml
           EOF
 
-      - name: Upload firmware artifact
+      # ── ZMK firmware (firmware/zmk, zmk-nix) ────────────────────────────────
+      # Produces kobu_left.uf2 (central + Studio), kobu_right.uf2 (peripheral)
+      # and kobu_reset.uf2 (settings_reset). `cp -L` dereferences the nix-store
+      # symlinks into a plain dir so upload-artifact / gh release can read them.
+      - name: Build ZMK firmware (both halves + settings-reset)
+        run: |
+          nix build .#zmk-bundle -o result-zmk --print-build-logs
+          mkdir -p zmk-out
+          cp -L result-zmk/kobu_left.uf2  zmk-out/kobu_left.uf2
+          cp -L result-zmk/kobu_right.uf2 zmk-out/kobu_right.uf2
+          cp -L result-zmk/kobu_reset.uf2 zmk-out/kobu_reset.uf2
+
+      - name: Upload firmware artifacts
         uses: actions/upload-artifact@v4
         with:
           name: kobu-firmware
@@ -94,44 +113,53 @@ jobs:
             firmware/rmk/peripheral.uf2
             firmware/rmk/central-reset.uf2
             firmware/rmk/peripheral-reset.uf2
+            zmk-out/kobu_left.uf2
+            zmk-out/kobu_right.uf2
+            zmk-out/kobu_reset.uf2
           if-no-files-found: error
 
-      # Publish a rolling pre-release tagged `firmware-latest` so the
-      # kobu-editor web app can fetch the latest UF2 over the public
-      # Releases API (no auth needed for public repos). Tag and assets
-      # are recreated on every successful main build.
+      # Publish a rolling pre-release tagged `firmware-latest` carrying BOTH the
+      # RMK and ZMK images so the kobu-editor web app (and humans) can fetch the
+      # latest UF2 over the public Releases API. Tag + assets are recreated on
+      # every successful main build.
       - name: Publish firmware-latest pre-release
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euxo pipefail
-          cd firmware/rmk
           SHA_SHORT=$(git rev-parse --short HEAD)
           DATE_UTC=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
           NOTES=$(cat <<NOTE
-          自動ビルドされた最新版です。
+          自動ビルドされた最新版です（RMK / ZMK 両ファームウェア）。
 
           - Commit: \`${{ github.sha }}\`
           - Built:  ${DATE_UTC}
           - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
+          ## RMK ファームウェア（既定）
           通常更新: \`central.uf2\` / \`peripheral.uf2\` を対象の XIAO BLE
           に書き込み (RESET 2 連打 → XIAO-BOOT にドラッグ&ドロップ)。
           既存のキーマップは保持されます。
 
-          工場出荷状態に戻す: \`*-reset.uf2\` を一度焼くと次回起動時に
-          storage の keymap がクリアされます。続けて通常版を焼き直すと
-          リリース時点のキーマップ + ペアリング情報維持の状態になります
-          (詳細は kobu-editor の「クリーンインストール」ボタン)。
+          工場出荷状態に戻す: \`central-reset.uf2\` / \`peripheral-reset.uf2\`
+          を一度焼くと次回起動時に storage の keymap がクリアされます。続けて
+          通常版を焼き直すとリリース時点のキーマップ + ペアリング情報維持の
+          状態になります (詳細は kobu-editor の「クリーンインストール」ボタン)。
+
+          ## ZMK ファームウェア（移植版）
+          \`kobu_left.uf2\` = 左 (central, ZMK Studio 対応) / \`kobu_right.uf2\` =
+          右 (peripheral) / \`kobu_reset.uf2\` = settings_reset。RMK と同じ要領で
+          RESET 2 連打 → ドラッグ&ドロップ。
           NOTE
           )
-          # Delete the previous release (and its moving tag) if present so
-          # the next `gh release create` doesn't conflict.
+          # Delete the previous release (and its moving tag) if present so the
+          # next `gh release create` doesn't conflict.
           gh release delete firmware-latest --yes --cleanup-tag || true
           gh release create firmware-latest \
-            central.uf2 peripheral.uf2 \
-            central-reset.uf2 peripheral-reset.uf2 \
+            firmware/rmk/central.uf2 firmware/rmk/peripheral.uf2 \
+            firmware/rmk/central-reset.uf2 firmware/rmk/peripheral-reset.uf2 \
+            zmk-out/kobu_left.uf2 zmk-out/kobu_right.uf2 zmk-out/kobu_reset.uf2 \
             --title "Latest firmware build ($SHA_SHORT)" \
             --notes "$NOTES" \
             --prerelease \
