@@ -7,7 +7,9 @@
  *     phantom slots at positions 30 and 39 = &none) — taken verbatim from
  *     keyboard.toml, NOT KobitoKey's 3-thumb row.
  *   - Every RMK "FH" mod-tap / layer-tap uses hold_timeout=350ms +
- *     hold_on_other_press=true -> ZMK hold-preferred, tapping-term-ms=350
+ *     RMK orig was hold_on_other_press; kobu now uses ZMK tap-preferred + tapping-term-ms=200
+ *     per user: a short press is ALWAYS the tap (other keys never force a hold), and a hold
+ *     only triggers after holding the key alone for 200 ms.
  *     (custom kmt / klt / ht_* below). KobitoKey used 200ms.
  *   - Layer 3 position 4 = &none (kobu has 4 BLE profiles; KobitoKey's
  *     5th BT_SEL is dropped).
@@ -141,61 +143,61 @@
             bindings = <&kp HOME>, <&kp LC(A)>;
         };
 
-        /* ---- FH hold-taps: 350ms, hold-preferred (= RMK hold_on_other_press) ---- */
+        /* ---- FH hold-taps: tap-preferred, 200ms (short press = instant tap; hold needs 200ms) ---- */
         kmt: kmt {                        /* generic FH mod-tap: &kmt MOD KEY */
             compatible = "zmk,behavior-hold-tap";
             #binding-cells = <2>;
-            tapping-term-ms = <350>;
+            tapping-term-ms = <200>;
             quick-tap-ms = <0>;
-            flavor = "hold-preferred";
+            flavor = "tap-preferred";
             bindings = <&kp>, <&kp>;
         };
         klt: klt {                        /* generic FH layer-tap: &klt LAYER KEY */
             compatible = "zmk,behavior-hold-tap";
             #binding-cells = <2>;
-            tapping-term-ms = <350>;
+            tapping-term-ms = <200>;
             quick-tap-ms = <0>;
-            flavor = "hold-preferred";
+            flavor = "tap-preferred";
             bindings = <&mo>, <&kp>;
         };
         ht_cmd_shift_colon: ht_cmd_shift_colon {   /* base ';' : hold Cmd+Shift / tap ':'/';' */
             compatible = "zmk,behavior-hold-tap";
             #binding-cells = <2>;
-            tapping-term-ms = <350>;
+            tapping-term-ms = <200>;
             quick-tap-ms = <0>;
-            flavor = "hold-preferred";
+            flavor = "tap-preferred";
             bindings = <&mod_cmd_shift>, <&colon_semi>;
         };
         ht_cmd_ctrl_qmark: ht_cmd_ctrl_qmark {     /* base '/' : hold Cmd+Ctrl / tap '/'/'?' */
             compatible = "zmk,behavior-hold-tap";
             #binding-cells = <2>;
-            tapping-term-ms = <350>;
+            tapping-term-ms = <200>;
             quick-tap-ms = <0>;
-            flavor = "hold-preferred";
+            flavor = "tap-preferred";
             bindings = <&mod_cmd_ctrl>, <&mm_qmark_slash>;
         };
         ht_ctrl_shift_colon: ht_ctrl_shift_colon { /* win ';' : hold Ctrl+Shift / tap ':'/';' */
             compatible = "zmk,behavior-hold-tap";
             #binding-cells = <2>;
-            tapping-term-ms = <350>;
+            tapping-term-ms = <200>;
             quick-tap-ms = <0>;
-            flavor = "hold-preferred";
+            flavor = "tap-preferred";
             bindings = <&mod_ctrl_shift>, <&colon_semi>;
         };
         ht_ctrl_alt_qmark: ht_ctrl_alt_qmark {     /* win '/' : hold Ctrl+Alt / tap '/'/'?' */
             compatible = "zmk,behavior-hold-tap";
             #binding-cells = <2>;
-            tapping-term-ms = <350>;
+            tapping-term-ms = <200>;
             quick-tap-ms = <0>;
-            flavor = "hold-preferred";
+            flavor = "tap-preferred";
             bindings = <&mod_ctrl_alt>, <&mm_qmark_slash>;
         };
         ht_shift_lgbkt: ht_shift_lgbkt {           /* layer4 TD(2): hold Shift / tap Cmd+[ */
             compatible = "zmk,behavior-hold-tap";
             #binding-cells = <2>;
-            tapping-term-ms = <350>;
+            tapping-term-ms = <200>;
             quick-tap-ms = <0>;
-            flavor = "hold-preferred";
+            flavor = "tap-preferred";
             bindings = <&kp>, <&kp>;
         };
     };
