@@ -15,8 +15,6 @@ manifest:
   remotes:
     - name: zmkfirmware
       url-base: https://github.com/zmkfirmware
-    - name: badjeff
-      url-base: https://github.com/badjeff
     - name: caksoylar
       url-base: https://github.com/caksoylar
 
@@ -27,10 +25,10 @@ manifest:
       revision: v0.3
       import: app/west.yml
 
-    # PMW3610 optical-trackball driver (both halves carry one).
-    - name: zmk-pmw3610-driver
-      remote: badjeff
-      revision: zmk-0.3
+    # NOTE: the PMW3610 trackball driver is NOT fetched from badjeff here — it is
+    # VENDORED (and patched to poll over SPI, since kobu's MOTION/P0_28 line is
+    # unreliable) under modules/zmk-pmw3610-driver, wired in via the repo-root
+    # zephyr/module.yml (cmake/kconfig/dts_root). See that module.yml.
 
     # Onboard RGB LED status widget (drives the rgbled_adapter shield).
     # Pinned to the v0.3 release tag (matches ZMK v0.3): `main` has moved to a

@@ -1,17 +1,29 @@
-# Registers firmware/zmk/ as a ZMK/Zephyr module so the custom `kobu` shield
-# under config/boards/shields/kobu/ is discoverable.
+# Registers firmware/zmk/ as a ZMK/Zephyr module providing BOTH the custom
+# `kobu` shield AND the (vendored, patched) PMW3610 trackball driver.
 #
-# zmk-nix (nix/zmk/keyboard.nix) only passes -DZMK_EXTRA_MODULES=<src root> when
-# a `zephyr/module.yml` exists at the SOURCE ROOT (= firmware/zmk/, where
-# flake.nix lives) — NOT inside config/. ZMK v0.3's app/CMakeLists.txt adds
-# ZMK_EXTRA_MODULES to ZEPHYR_EXTRA_MODULES but does NOT derive a board root
-# from ZMK_CONFIG, so without this file the shield is never found and the build
-# fails with "shield kobu_left not found". `board_root: config` points Zephyr at
-# <module>/config/boards, where the kobu shield lives.
+# zmk-nix (nix/zmk/keyboard.nix) passes -DZMK_EXTRA_MODULES=<src root> when a
+# `zephyr/module.yml` exists at the SOURCE ROOT (= firmware/zmk/), so this one
+# module is how the build discovers everything below it. ZMK v0.3's
+# app/CMakeLists.txt does NOT derive a board root from ZMK_CONFIG, so the shield
+# is only found via `board_root: config`.
 #
-# (KobitoKey uses config/zephyr/module.yml with `board_root: .` for the GitHub
-# Actions flow; the zmk-nix flow needs it at the src root with `board_root:
-# config` instead.)
+#   board_root: config                       -> config/boards/shields/kobu (shield)
+#   cmake/kconfig: modules/zmk-pmw3610-driver -> compile + Kconfig the vendored
+#                                                PMW3610 driver (patched to POLL
+#                                                over SPI; kobu's MOTION/P0_28
+#                                                line is unreliable so the stock
+#                                                IRQ-only driver never fires —
+#                                                see modules/zmk-pmw3610-driver
+#                                                and config/.../kobu_*.conf
+#                                                CONFIG_PMW3610_POLL_INTERVAL_MS).
+#   dts_root: modules/zmk-pmw3610-driver      -> the pixart,pmw3610 binding.
+#
+# The PMW3610 driver is vendored here (not fetched from badjeff via west)
+# precisely so the polling patch can live in-repo; west.yml therefore no longer
+# lists the badjeff project.
 build:
+  cmake: modules/zmk-pmw3610-driver
+  kconfig: modules/zmk-pmw3610-driver/Kconfig
   settings:
     board_root: config
+    dts_root: modules/zmk-pmw3610-driver

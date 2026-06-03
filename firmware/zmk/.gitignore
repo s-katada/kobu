@@ -10,6 +10,9 @@
 /zmk/
 /zephyr/*
 !/zephyr/module.yml
-/modules/
+# Ignore west-fetched modules from the fallback manual build, but KEEP the
+# vendored+patched PMW3610 driver (it is part of the repo / Nix flake source).
+/modules/*
+!/modules/zmk-pmw3610-driver/
 /tools/
 /build/

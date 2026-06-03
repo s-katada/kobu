@@ -197,15 +197,16 @@
         # there so zmk-nix sees config/ + zephyr/module.yml at the src root.
         zmkLib = zmk-nix.legacyPackages.${system};
         zmkSrc = pkgs.lib.sourceFilesBySuffices ./firmware/zmk [
-          ".board" ".cmake" ".conf" ".defconfig" ".dts" ".dtsi"
-          ".json" ".keymap" ".overlay" ".shield" ".yml" "_defconfig"
+          ".board" ".c" ".cmake" ".conf" ".defconfig" ".dts" ".dtsi"
+          ".h" ".json" ".keymap" ".overlay" ".shield" ".txt" ".yml"
+          "_defconfig" "Kconfig"
         ];
         zmkBoard = "seeeduino_xiao_ble";
         # FIXED-OUTPUT hash of the west-fetched module tree (ZMK v0.3 + Zephyr
         # + pmw3610 driver + rgbled-widget v0.3, per firmware/zmk/config/west.yml).
         # Re-bootstrap if that west.yml changes: set lib.fakeHash, build, paste
         # the reported `got: sha256-...`.
-        zmkDepsHash = "sha256-jeXqoHbIo2Qci2whC/G3ITNCDzCNJul85DhmsfSncA0=";
+        zmkDepsHash = "sha256-ssNIO18+2Qo3RkWF7E4MGY4vxTPGygs6d0q2naPdivg=";
         zmkMeta = {
           license = pkgs.lib.licenses.mit;
           platforms = pkgs.lib.platforms.all;
@@ -220,6 +221,10 @@
           shield = "kobu_%PART% rgbled_adapter";
           parts = [ "left" "right" ];
           centralPart = "left";
+          # Studio (USB keymap editor; ZMK analogue of kobu's RMK web/Vial
+          # editor) — central (left) only, applied by split.nix. true adds the
+          # protobuf/grpcio-tools python deps nanopb needs, the
+          # studio-rpc-usb-uart snippet (CDC-ACM transport), and -DCONFIG_ZMK_STUDIO=y.
           enableZmkStudio = true;
           zephyrDepsHash = zmkDepsHash;
           meta = zmkMeta // { description = "kobu split keyboard ZMK firmware (both halves)"; };
