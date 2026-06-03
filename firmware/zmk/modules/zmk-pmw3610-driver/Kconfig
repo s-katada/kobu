@@ -53,6 +53,18 @@ config PMW3610_POLL_INTERVAL_MS
 	  unreliable or unwired (kobu's PCB). 8-15 ms recommended; the IRQ path
 	  remains active. kobu patch — not in upstream badjeff/zmk-pmw3610-driver.
 
+config PMW3610_MAX_DELTA
+	int "Reject single-sample deltas with |dx|/|dy| above this (0 = disabled)"
+	default 0
+	help
+	  When > 0, any decoded per-sample delta whose magnitude exceeds this raw
+	  count is zeroed. A real hand-roll never produces such a delta in one
+	  sample, but a PARTIAL flaky-SPI read (a corrupted XY_H high nibble) decodes
+	  to a huge value that an un-clamped scroll scaler turns into a sudden "gyun"
+	  jump. 90 matches RMK's SCROLL_MAX_UNITS(3)×SCROLL_STEP(30) ceiling. Enable
+	  on the flaky-SPI scroll half only; leave unset on the pointer half so fast
+	  cursor flicks are never capped. kobu patch — not in upstream badjeff driver.
+
 config PMW3610_SMART_ALGORITHM
   bool "Enable an algorithm of PMW3610 to enhance surface coverage"
   default y

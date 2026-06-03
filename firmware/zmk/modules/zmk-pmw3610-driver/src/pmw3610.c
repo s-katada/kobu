@@ -477,6 +477,20 @@ static int pmw3610_report_data(const struct device *dev) {
     int16_t y = TOINT16((buf[PMW3610_Y_L_POS] + ((buf[PMW3610_XY_H_POS] & 0x0F) << 8)), 12);
     LOG_DBG("x/y: %d/%d", x, y);
 
+#if CONFIG_PMW3610_MAX_DELTA > 0
+    // kobu: spike reject for the flaky 3-wire SDIO. The buf[0]==0xFF gate below
+    // only catches a FULL float; a PARTIAL glitch (buf[0] valid but buf[XY_H]
+    // corrupted) decodes to a huge delta — a single sign-nibble flip yields
+    // ±256..±2048 — which the un-clamped zip_scroll_scaler turns into a giant
+    // "gyun" wheel jump. A real hand-roll never exceeds CONFIG_PMW3610_MAX_DELTA
+    // counts in one sample (RMK uses ±90 = SCROLL_MAX_UNITS 3 × SCROLL_STEP 30,
+    // and fast flicks stay under it), so drop the offending axis. Enabled on the
+    // LEFT scroll ball only (its sensor is the flaky one); the RIGHT pointer
+    // leaves it unset so fast cursor flicks are never capped.
+    if (x > CONFIG_PMW3610_MAX_DELTA || x < -CONFIG_PMW3610_MAX_DELTA) x = 0;
+    if (y > CONFIG_PMW3610_MAX_DELTA || y < -CONFIG_PMW3610_MAX_DELTA) y = 0;
+#endif
+
     // kobu: reject a failed/glitched 3-wire SPI read. The kobu LEFT sensor's
     // shared SDIO line intermittently fails to read back, floating high so the
     // whole burst returns 0xFF. buf[0] is the MOTION status register, whose
