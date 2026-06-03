@@ -1,0 +1,40 @@
+/*
+ * kobu flash layout — NO-SoftDevice / app at 0x1000.
+ *
+ * The kobu XIAO units run a no-SoftDevice Adafruit UF2 bootloader (v0.6.1,
+ * INFO_UF2.TXT: "SoftDevice: not found") that boots the application from
+ * 0x1000 — exactly like kobu's RMK firmware (firmware/rmk/memory.x:
+ * FLASH ORIGIN = 0x00001000). A stock ZMK image links the app at 0x27000
+ * (the SoftDevice layout for a factory XIAO), which this bootloader never
+ * jumps to, so a 0x27000 ZMK UF2 flashes "fine" over USB but the board stays
+ * completely dead (no LED, no BLE; reset only reaches the bootloader).
+ *
+ * Moving ZMK's code partition to 0x1000 makes the produced UF2 target 0x1000,
+ * so the bootloader boots it via plain USB drag-and-drop — the same way RMK is
+ * flashed, no SWD probe required. ZMK uses its own Zephyr BLE controller (not a
+ * Nordic SoftDevice), so dropping the SoftDevice region changes nothing
+ * functionally. Applies to every build on seeeduino_xiao_ble (kobu_left,
+ * kobu_right, settings_reset). Final layout mirrors RMK's (proven on these
+ * exact units):
+ *   0x000000..0x001000  MBR / (unused) sd_partition  (reserved by bootloader)
+ *   0x001000..0x0ec000  code_partition (ZMK app, 0xeb000 = 940 KiB)
+ *   0x0ec000..0x0f4000  storage        (ZMK settings NVS, 32 KiB — unchanged)
+ *   0x0f4000..0x100000  adafruit_boot  (bootloader — unchanged)
+ *
+ * IMPORTANT: this file is applied TWICE by the zmk-nix build — ZMK discovers
+ * config/boards/<board>.overlay via BOTH `ZMK_CONFIG=config` and the kobu
+ * module's `board_root: config`. Every statement here is therefore an
+ * IDEMPOTENT reg-override; do NOT use `/delete-node/` (it errors "undefined
+ * node label" on the second application).
+ */
+
+/* Shrink the unused SoftDevice partition to just the MBR region so the code
+ * partition can own 0x1000 with no overlap. Nothing references sd_partition. */
+&sd_partition {
+    reg = <0x00000000 0x00001000>;
+};
+
+/* ZMK application at 0x1000 (no-SoftDevice layout). */
+&code_partition {
+    reg = <0x00001000 0x000eb000>;
+};
