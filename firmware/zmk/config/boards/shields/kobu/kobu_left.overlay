@@ -93,7 +93,7 @@
     input-processors =
         <&zip_y_scaler 0 1>,             /* kill vertical (scroll is horizontal-only) */
         <&zip_x_to_wheel_mapper>,        /* horizontal roll -> vertical wheel          */
-        <&zip_scroll_scaler 1 18>;       /* ~18 raw counts / wheel line (was 30; more sensitive per user) */
+        <&zip_scroll_scaler 1 12>;       /* ~12 raw counts / wheel line (30→18→12; lower = first wheel tick comes sooner) */
         /* Direction: roll-right = scroll-up by default (matches RMK
          * scroll_invert_x=false). If a bench test scrolls the wrong way, add
          * <&zip_scroll_transform INPUT_TRANSFORM_Y_INVERT> to this list. */
