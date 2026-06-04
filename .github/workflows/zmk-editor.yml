@@ -1,0 +1,58 @@
+name: ZMK editor
+
+# Lint / typecheck / test / build for the ZMK keymap editor SPA. The
+# production deploy lives in `web.yml`, which serves this app from the
+# shared Cloudflare Worker under the `/zmk` subpath (so there is exactly
+# one worker + one custom domain).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/zmk-editor/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/zmk-editor.yml"
+  pull_request:
+    paths:
+      - "web/zmk-editor/**"
+      - "flake.nix"
+      - "flake.lock"
+      - ".github/workflows/zmk-editor.yml"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: web/zmk-editor
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('web/zmk-editor/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: nix develop ../..#web --command pnpm install --frozen-lockfile
+
+      - name: Lint (Biome)
+        run: nix develop ../..#web --command pnpm lint
+
+      - name: Typecheck
+        run: nix develop ../..#web --command pnpm typecheck
+
+      - name: Test
+        run: nix develop ../..#web --command pnpm test
+
+      - name: Build
+        run: nix develop ../..#web --command pnpm build
