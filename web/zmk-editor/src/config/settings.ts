@@ -69,12 +69,13 @@ export const SETTINGS: SettingDef[] = [
     label: 'スクロール感度（分母）',
     group: 'トラックボール',
     kind: 'int',
-    default: 18,
+    default: 12,
     min: 5,
     max: 60,
     step: 1,
     unit: 'counts/line',
-    description: '1 行スクロールに必要な生カウント数。小さいほど速くスクロールします。',
+    description:
+      '1 行スクロールに必要な生カウント数。小さいほど速く＝出だしが早くスクロールします。',
   },
   {
     id: 'tapping_term_ms',
@@ -99,6 +100,19 @@ export const SETTINGS: SettingDef[] = [
     step: 5,
     unit: 'ms',
     description: '2 キー同時押しをコンボとみなす時間窓。',
+  },
+  {
+    id: 'require_prior_idle_ms',
+    label: 'オートマウス発動の待ち時間（キー入力後）',
+    group: 'オートマウス',
+    kind: 'int',
+    default: 300,
+    min: 0,
+    max: 1000,
+    step: 25,
+    unit: 'ms',
+    description:
+      'キー入力からこの時間が経つまではマウスレイヤーを発動させない。短いほど発動が速いが、タイプ振動での誤発動が増える（ZMK には移動量ゲートが無いため、これが唯一の調整レバー）。',
   },
   {
     id: 'automouse_timeout_ms',

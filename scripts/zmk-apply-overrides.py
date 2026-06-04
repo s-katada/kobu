@@ -39,6 +39,7 @@ BOUNDS = {
     "right_cpi": (100, 3000),
     "pointer_gain_x100": (50, 300),
     "scroll_divisor": (5, 60),
+    "require_prior_idle_ms": (0, 1000),
     "automouse_timeout_ms": (50, 600),
     "tapping_term_ms": (50, 500),
     "combo_timeout_ms": (10, 150),
@@ -98,6 +99,9 @@ def main() -> None:
     if "scroll_divisor" in ov:
         v = clamp("scroll_divisor", ov["scroll_divisor"])
         patch(left, r"&zip_scroll_scaler 1 \d+", f"&zip_scroll_scaler 1 {v}", "scroll_divisor", count=1)
+    if "require_prior_idle_ms" in ov:
+        v = clamp("require_prior_idle_ms", ov["require_prior_idle_ms"])
+        patch(left, r"require-prior-idle-ms = <\d+>;", f"require-prior-idle-ms = <{v}>;", "require_prior_idle", count=1)
     if "automouse_timeout_ms" in ov:
         v = clamp("automouse_timeout_ms", ov["automouse_timeout_ms"])
         patch(left, r"&zip_temp_layer 4 \d+", f"&zip_temp_layer 4 {v}", "automouse_timeout", count=1)

@@ -140,6 +140,7 @@ const OVERRIDE_BOUNDS: Record<string, readonly [number, number]> = {
   scroll_divisor: [5, 60],
   tapping_term_ms: [50, 500],
   combo_timeout_ms: [10, 150],
+  require_prior_idle_ms: [0, 1000],
   automouse_timeout_ms: [50, 600],
 };
 
