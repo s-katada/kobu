@@ -438,6 +438,10 @@ static void pmw3610_async_init(struct k_work *work) {
             k_work_schedule(&data->poll_work, K_MSEC(CONFIG_PMW3610_POLL_INTERVAL_MS));
             LOG_INF("PMW3610 polling every %d ms (kobu MOTION-independent)", CONFIG_PMW3610_POLL_INTERVAL_MS);
 #endif
+#if CONFIG_PMW3610_FORCE_AWAKE_HEARTBEAT_MS > 0
+            k_work_schedule(&data->heartbeat_work, K_MSEC(CONFIG_PMW3610_FORCE_AWAKE_HEARTBEAT_MS));
+            LOG_INF("PMW3610 force-awake heartbeat every %d ms", CONFIG_PMW3610_FORCE_AWAKE_HEARTBEAT_MS);
+#endif
         } else {
             k_work_schedule(&data->init_work, K_MSEC(async_init_delay[data->async_init_step]));
         }
@@ -598,6 +602,27 @@ static void pmw3610_poll_work_callback(struct k_work *work) {
 }
 #endif
 
+/* kobu: force-awake HEARTBEAT. Re-asserts RUN mode every N ms WITHOUT reading the
+ * motion burst, so (unlike the poll work above) it never clears the sensor's
+ * slow-roll sub-count accumulation. Fixes the "scroll sometimes takes a moment to
+ * start" latency on the flaky LEFT sensor — a one-shot force-awake init write lost
+ * to a bad SPI read leaves the sensor dozing in a REST mode with a slow sample
+ * rate — while keeping the pure-IRQ (POLL_INTERVAL_MS=0) slow-motion behaviour the
+ * scroll ball relies on. pmw3610_set_performance() self-gates on config->force_awake
+ * (no-op otherwise) and only writes when the RUN bits aren't already set. */
+#if CONFIG_PMW3610_FORCE_AWAKE_HEARTBEAT_MS > 0
+static void pmw3610_heartbeat_work_callback(struct k_work *work) {
+    struct k_work_delayable *work2 = (struct k_work_delayable *)work;
+    struct pixart_data *data = CONTAINER_OF(work2, struct pixart_data, heartbeat_work);
+    const struct device *dev = data->dev;
+
+    if (data->ready) {
+        pmw3610_set_performance(dev, true);
+    }
+    k_work_schedule(&data->heartbeat_work, K_MSEC(CONFIG_PMW3610_FORCE_AWAKE_HEARTBEAT_MS));
+}
+#endif
+
 static void pmw3610_gpio_callback(const struct device *gpiob, struct gpio_callback *cb,
                                   uint32_t pins) {
     struct pixart_data *data = CONTAINER_OF(cb, struct pixart_data, irq_gpio_cb);
@@ -664,6 +689,11 @@ static int pmw3610_init(const struct device *dev) {
 #if CONFIG_PMW3610_POLL_INTERVAL_MS > 0
     // kobu: init the IRQ-independent poll work (unreliable MOTION line)
     k_work_init_delayable(&data->poll_work, pmw3610_poll_work_callback);
+#endif
+
+#if CONFIG_PMW3610_FORCE_AWAKE_HEARTBEAT_MS > 0
+    // kobu: init the force-awake heartbeat work (keeps RUN mode without a motion read)
+    k_work_init_delayable(&data->heartbeat_work, pmw3610_heartbeat_work_callback);
 #endif
 
     // init irq routine

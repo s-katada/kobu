@@ -53,6 +53,18 @@ config PMW3610_POLL_INTERVAL_MS
 	  unreliable or unwired (kobu's PCB). 8-15 ms recommended; the IRQ path
 	  remains active. kobu patch — not in upstream badjeff/zmk-pmw3610-driver.
 
+config PMW3610_FORCE_AWAKE_HEARTBEAT_MS
+	int "PMW3610 force-awake re-assert heartbeat (ms, 0 = disabled)"
+	default 0
+	help
+	  When > 0, periodically re-write the performance (force-awake) register
+	  every N ms WITHOUT reading the motion burst. Unlike polling, this never
+	  clears the sensor's motion accumulation, so it keeps a force-awake sensor
+	  pinned in RUN mode (fixing slow-roll startup latency when the one-shot
+	  init write is lost to a flaky SPI read) while preserving pure-IRQ
+	  slow-motion sub-count accumulation. Only meaningful with `force-awake`
+	  set on the sensor node. kobu patch — not in upstream badjeff driver.
+
 config PMW3610_MAX_DELTA
 	int "Reject single-sample deltas with |dx|/|dy| above this (0 = disabled)"
 	default 0

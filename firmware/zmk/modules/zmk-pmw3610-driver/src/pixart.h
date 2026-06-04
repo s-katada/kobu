@@ -31,6 +31,10 @@ struct pixart_data {
     struct k_work_delayable      poll_work; // kobu: IRQ-independent periodic motion poll
 #endif
 
+#if CONFIG_PMW3610_FORCE_AWAKE_HEARTBEAT_MS > 0
+    struct k_work_delayable      heartbeat_work; // kobu: periodic force-awake re-assert (no motion read)
+#endif
+
     bool                         ready; // whether init is finished successfully
     int                          err; // error code during async init
 };
