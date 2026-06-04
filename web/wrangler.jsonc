@@ -11,5 +11,10 @@
   "observability": {
     "enabled": true
   },
+  // Firmware repo for the ZMK editor's build endpoints. The GitHub token
+  // is a secret: `wrangler secret put GITHUB_TOKEN` (fine-grained PAT with
+  // actions:read+write + contents:read). Without it the build endpoints
+  // return 501 and the rest of the app is unaffected.
+  "vars": { "GH_OWNER": "s-katada", "GH_REPO": "kobu" },
   "routes": [{ "pattern": "kobu-editor.digletts.dev", "custom_domain": true }]
 }

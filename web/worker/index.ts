@@ -22,6 +22,16 @@
 
 export interface Env {
   ASSETS: Fetcher;
+  /**
+   * Fine-grained PAT with `actions:read+write` + `contents:read` on the
+   * firmware repo. Set via `wrangler secret put GITHUB_TOKEN`. When
+   * absent, the ZMK editor's build endpoints return 501 and the UI shows
+   * "build not configured" — everything else still works.
+   */
+  GITHUB_TOKEN?: string;
+  /** Firmware repo owner / name (defaults below). */
+  GH_OWNER?: string;
+  GH_REPO?: string;
 }
 
 const RELEASE_PREFIX = '/__release';
@@ -66,12 +76,21 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Content-Security-Policy': CSP,
   'X-Content-Type-Options': 'nosniff',
   'Referrer-Policy': 'strict-origin-when-cross-origin',
-  // kobu-editor explicitly needs WebHID. Allow it for our own origin
-  // only — `()` denies every other unused powerful API.
-  'Permissions-Policy': [
-    'hid=(self)',
-    'usb=()',
-    'bluetooth=()',
+};
+
+// Powerful-API allow-list, per app:
+//   * the RMK editor (root `/`) needs WebHID;
+//   * the ZMK editor (`/zmk`) needs Web Serial + Web Bluetooth (ZMK
+//     Studio transports).
+// Everything else is denied. The policy is attached to the served
+// document so each app only gets the features it actually uses.
+function permissionsPolicy(pathname: string): string {
+  const isZmk = pathname === '/zmk' || pathname.startsWith('/zmk/');
+  const allow = isZmk
+    ? ['hid=()', 'serial=(self)', 'bluetooth=(self)', 'usb=()']
+    : ['hid=(self)', 'serial=()', 'bluetooth=()', 'usb=()'];
+  return [
+    ...allow,
     'camera=()',
     'microphone=()',
     'geolocation=()',
@@ -79,20 +98,147 @@ const SECURITY_HEADERS: Record<string, string> = {
     'accelerometer=()',
     'magnetometer=()',
     'payment=()',
-    'serial=()',
-  ].join(', '),
-};
+  ].join(', ');
+}
 
-function withSecurityHeaders(response: Response): Response {
+function withSecurityHeaders(response: Response, pathname: string): Response {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
     headers.set(name, value);
   }
+  headers.set('Permissions-Policy', permissionsPolicy(pathname));
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
     headers,
   });
+}
+
+// ── ZMK editor: GitHub Actions firmware-build proxy ──────────────────────
+//
+// The ZMK editor's "detailed settings" can't change live (ZMK bakes
+// CPI / hold-tap / combo timing into the firmware at build time). Instead
+// the browser POSTs the changed knobs here; we dispatch a parameterised
+// `firmware.yml` build, the workflow patches the config via
+// `scripts/zmk-apply-overrides.py`, and we proxy the resulting artifact
+// back for in-browser flashing. The GitHub token never reaches the client.
+
+const GH_API = 'https://api.github.com';
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+// Allowed override keys + integer bounds (mirrors the build script).
+const OVERRIDE_BOUNDS: Record<string, readonly [number, number]> = {
+  left_cpi: [100, 3000],
+  right_cpi: [100, 3000],
+  pointer_gain_x100: [50, 300],
+  scroll_divisor: [5, 60],
+  tapping_term_ms: [50, 500],
+  combo_timeout_ms: [10, 150],
+  automouse_timeout_ms: [50, 600],
+};
+
+function sanitizeOverrides(input: unknown): Record<string, number> {
+  const out: Record<string, number> = {};
+  if (typeof input !== 'object' || input === null) return out;
+  const obj = input as Record<string, unknown>;
+  for (const [key, [lo, hi]] of Object.entries(OVERRIDE_BOUNDS)) {
+    const v = obj[key];
+    if (typeof v !== 'number' || !Number.isFinite(v)) continue;
+    out[key] = Math.min(hi, Math.max(lo, Math.round(v)));
+  }
+  return out;
+}
+
+interface GhRun {
+  id: number;
+  name: string | null;
+  status: string;
+  conclusion: string | null;
+}
+
+async function handleFirmwareBuild(request: Request, url: URL, env: Env): Promise<Response> {
+  const token = env.GITHUB_TOKEN;
+  if (!token) return json({ error: 'build-not-configured' }, 501);
+  const owner = env.GH_OWNER ?? 's-katada';
+  const repo = env.GH_REPO ?? 'kobu';
+  const gh: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'kobu-zmk-editor',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+
+  if (url.pathname === '/zmk/__build' && request.method === 'POST') {
+    let body: { overrides?: unknown };
+    try {
+      body = (await request.json()) as { overrides?: unknown };
+    } catch {
+      return json({ error: 'invalid-json' }, 400);
+    }
+    const overrides = sanitizeOverrides(body.overrides);
+    if (Object.keys(overrides).length === 0) return json({ error: 'no-overrides' }, 400);
+    const buildId = crypto.randomUUID();
+    const overridesB64 = btoa(JSON.stringify({ overrides, build_id: buildId }));
+    const res = await fetch(
+      `${GH_API}/repos/${owner}/${repo}/actions/workflows/firmware.yml/dispatches`,
+      {
+        method: 'POST',
+        headers: { ...gh, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ref: 'main',
+          inputs: { overrides_b64: overridesB64, build_id: buildId },
+        }),
+      },
+    );
+    if (res.status !== 204) {
+      return json({ error: 'dispatch-failed', status: res.status }, 502);
+    }
+    return json({ ok: true, build_id: buildId });
+  }
+
+  if (url.pathname === '/zmk/__build/status' && request.method === 'GET') {
+    const buildId = url.searchParams.get('build_id');
+    if (!buildId) return json({ error: 'missing-build_id' }, 400);
+    const res = await fetch(
+      `${GH_API}/repos/${owner}/${repo}/actions/runs?event=workflow_dispatch&per_page=30`,
+      { headers: gh },
+    );
+    if (!res.ok) return json({ error: 'list-runs-failed', status: res.status }, 502);
+    const data = (await res.json()) as { workflow_runs?: GhRun[] };
+    const run = data.workflow_runs?.find((r) => (r.name ?? '').includes(buildId));
+    if (!run) return json({ status: 'queued', conclusion: null });
+    return json({ status: run.status, conclusion: run.conclusion, run_id: run.id });
+  }
+
+  if (url.pathname === '/zmk/__artifact' && request.method === 'GET') {
+    const runId = url.searchParams.get('run_id');
+    if (!runId) return json({ error: 'missing-run_id' }, 400);
+    const listRes = await fetch(
+      `${GH_API}/repos/${owner}/${repo}/actions/runs/${encodeURIComponent(runId)}/artifacts`,
+      { headers: gh },
+    );
+    if (!listRes.ok) return json({ error: 'list-artifacts-failed', status: listRes.status }, 502);
+    const list = (await listRes.json()) as { artifacts?: Array<{ id: number; name: string }> };
+    const artifact = list.artifacts?.[0];
+    if (!artifact) return json({ error: 'no-artifact' }, 404);
+    const zipRes = await fetch(
+      `${GH_API}/repos/${owner}/${repo}/actions/artifacts/${artifact.id}/zip`,
+      { headers: gh, redirect: 'follow' },
+    );
+    if (!zipRes.ok) return json({ error: 'artifact-download-failed', status: zipRes.status }, 502);
+    return new Response(zipRes.body, {
+      status: 200,
+      headers: { 'content-type': 'application/zip' },
+    });
+  }
+
+  return json({ error: 'not-found' }, 404);
 }
 
 export default {
@@ -135,7 +281,24 @@ export default {
       });
     }
 
+    // ZMK editor firmware-build endpoints (detailed settings → GitHub
+    // Actions build → flash). The token lives server-side only.
+    if (
+      url.pathname === '/zmk/__build' ||
+      url.pathname === '/zmk/__build/status' ||
+      url.pathname === '/zmk/__artifact'
+    ) {
+      return handleFirmwareBuild(request, url, env);
+    }
+
+    // The ZMK editor is a separate SPA built with base `/zmk/` and served
+    // from `dist/zmk/`. Normalise the bare path so `/zmk` lands on its
+    // index instead of the root SPA fallback.
+    if (url.pathname === '/zmk') {
+      return Response.redirect(new URL('/zmk/', url).toString(), 301);
+    }
+
     const response = await env.ASSETS.fetch(request);
-    return withSecurityHeaders(response);
+    return withSecurityHeaders(response, url.pathname);
   },
 } satisfies ExportedHandler<Env>;

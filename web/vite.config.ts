@@ -42,8 +42,13 @@ export default defineConfig({
         // bypasses the SW so users always get the latest GitHub
         // release.
         globPatterns: ['**/*.{js,css,html,svg,png,ico,webmanifest}'],
+        // The ZMK editor (a separate SPA) is deployed under `/zmk/`. Keep
+        // its assets out of this service worker's precache, and don't let
+        // this SW's navigation fallback hijack `/zmk` routes — the Worker
+        // serves that app's own index.
+        globIgnores: ['**/zmk/**'],
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: [/^\/__release/],
+        navigateFallbackDenylist: [/^\/__release/, /^\/zmk/],
         runtimeCaching: [],
         // ~5 MB ceiling per asset; the bundle is ~300 kB so this is
         // headroom, but keep it explicit so the build fails loudly if
@@ -81,7 +86,9 @@ export default defineConfig({
     // `dist`, but not `.direnv` — direnv copies flake inputs (full
     // nixpkgs sources, etc.) underneath it and they contain their
     // own tests we definitely do not want to run.
-    exclude: ['**/node_modules/**', '**/dist/**', '**/.direnv/**'],
+    // `web/zmk-editor` is a separate app with its own deps + test run;
+    // keep this project's vitest from discovering its `*.test.ts`.
+    exclude: ['**/node_modules/**', '**/dist/**', '**/.direnv/**', '**/zmk-editor/**'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
