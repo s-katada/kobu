@@ -58,7 +58,7 @@
         reg = <0>;
         spi-max-frequency = <250000>;    /* kobu: 250 kHz. 2 MHz floated to 0xFF on this marginal LEFT 3-wire SDIO; 1 MHz / 500 kHz still let partial SIGN-flip glitches through (occasional wrong-direction scroll tick). Pure-IRQ (poll off) so clock doesn't affect slow-roll response — drop to 250 kHz to cut the glitch rate further at the source. Burst ~224 us, negligible. HW-confirmed improvement 2026-06-05 (user). */
         irq-gpios = <&gpio0 28 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;  /* P0_28 = MOTION (D2) */
-        cpi = <600>;          /* kobu keyboard.toml (NOT KobitoKey's 700) */
+        cpi = <400>;          /* LEFT scroll ball: calmer scroll (user 2026-06-06; was 600 from keyboard.toml). PMW3610 CPI is quantized to 200-cpi steps (cpi/200), so 400 = one step below 600 (200 is the next step down). INDEPENDENT of the RIGHT pointer CPI, which is set on its own tb_right node in kobu_right.overlay. */
         force-awake;          /* = RMK force_awake=true (continuous tracking) */
 
         evt-type = <INPUT_EV_REL>;
