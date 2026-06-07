@@ -51,6 +51,13 @@ export interface KeymapViewProps {
   onCellClick: (row: number, col: number) => void;
   /** Optional hover callback — receives the cell or null when leaving. */
   onCellHover?: (cell: { row: number; col: number } | null) => void;
+  /**
+   * Physical (row, col) keys to spotlight — e.g. the Vial unlock chord, so
+   * the user can see which keys to hold. Highlighted (pulsing) only while
+   * `chordActive` is true.
+   */
+  chordCells?: ReadonlyArray<{ row: number; col: number }>;
+  chordActive?: boolean;
 }
 
 export function KeymapView({
@@ -60,6 +67,8 @@ export function KeymapView({
   isDirty,
   onCellClick,
   onCellHover,
+  chordCells,
+  chordActive = false,
 }: KeymapViewProps) {
   const midCol = Math.floor(definition.matrix.cols / 2);
   const cells = useMemo(
@@ -96,6 +105,9 @@ export function KeymapView({
           const isSelected =
             selected !== null && selected.row === cell.row && selected.col === cell.col;
           const dirty = isDirty(cell.row, cell.col);
+          const isChord =
+            chordActive === true &&
+            chordCells?.some((c) => c.row === cell.row && c.col === cell.col) === true;
           return (
             <Keycap
               key={`${cell.row}-${cell.col}`}
@@ -103,6 +115,7 @@ export function KeymapView({
               label={label}
               selected={isSelected}
               dirty={dirty}
+              chord={isChord}
               onClick={() => onCellClick(cell.row, cell.col)}
               onMouseEnter={() => onCellHover?.({ row: cell.row, col: cell.col })}
             />
@@ -118,11 +131,20 @@ interface KeycapProps {
   label: KeyLabel;
   selected: boolean;
   dirty: boolean;
+  chord?: boolean;
   onClick: () => void;
   onMouseEnter?: () => void;
 }
 
-function Keycap({ cell, label, selected, dirty, onClick, onMouseEnter }: KeycapProps) {
+function Keycap({
+  cell,
+  label,
+  selected,
+  dirty,
+  chord = false,
+  onClick,
+  onMouseEnter,
+}: KeycapProps) {
   const left = PADDING + cell.x * UNIT + GAP / 2;
   const top = PADDING + cell.y * UNIT + GAP / 2;
   const w = cell.w * UNIT - GAP;
@@ -146,6 +168,9 @@ function Keycap({ cell, label, selected, dirty, onClick, onMouseEnter }: KeycapP
         cellTone(label.tone),
         selected
           ? 'ring-2 ring-sky-500 ring-offset-1 ring-offset-zinc-50 dark:ring-offset-zinc-950 -translate-y-px shadow-md'
+          : '',
+        chord
+          ? 'ring-2 ring-amber-500 ring-offset-1 ring-offset-zinc-50 dark:ring-offset-zinc-950 motion-safe:animate-pulse z-10'
           : '',
       ].join(' ')}
       style={{

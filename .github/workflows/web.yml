@@ -107,7 +107,12 @@ jobs:
     environment: production
     defaults:
       run:
-        working-directory: web
+        # The project lives in web/rmk-editor (package.json + wrangler.jsonc are
+        # there; web/ itself has neither). `web` made install/build/wrangler all
+        # run in an empty dir AND mis-resolved `nix develop ../..#web` one level
+        # too shallow → the deploy job never shipped. The zmk-editor step below
+        # overrides this to web/zmk-editor explicitly.
+        working-directory: web/rmk-editor
     steps:
       - uses: actions/checkout@v4
 

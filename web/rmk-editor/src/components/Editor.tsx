@@ -29,6 +29,7 @@ import { isCellDirty, useEditorStore } from '../state/editor';
 import { useKobuSettingsStore } from '../state/kobuSettings';
 import { useMacroStore } from '../state/macros';
 import { useMorseStore } from '../state/morses';
+import { useUnlockStore } from '../state/unlock';
 import { BluetoothPanel } from './BluetoothPanel';
 import { ComboEditor } from './ComboEditor';
 import { EditorToolbar } from './EditorToolbar';
@@ -38,6 +39,7 @@ import { KobuBatteryPanel } from './KobuBatteryPanel';
 import { KobuSettingsPanel } from './KobuSettingsPanel';
 import { MacroEditor } from './MacroEditor';
 import { MorseEditor } from './MorseEditor';
+import { UnlockPanel } from './UnlockPanel';
 
 export function Editor() {
   const connection = useConnectionStore((s) => s.state);
@@ -51,6 +53,8 @@ export function Editor() {
   const detachMorses = useMorseStore((s) => s.detach);
   const attachKobu = useKobuSettingsStore((s) => s.attach);
   const detachKobu = useKobuSettingsStore((s) => s.detach);
+  const attachUnlock = useUnlockStore((s) => s.attach);
+  const detachUnlock = useUnlockStore((s) => s.detach);
 
   // Attach the per-feature stores in lock-step with the connection.
   // They share one transport but keep independent dirty state.
@@ -61,12 +65,14 @@ export function Editor() {
       void attachCombos(connection.transport);
       void attachMorses(connection.transport);
       void attachKobu(connection.transport);
+      void attachUnlock(connection.transport);
     } else {
       detach();
       detachMacros();
       detachCombos();
       detachMorses();
       detachKobu();
+      detachUnlock();
     }
   }, [
     connection,
@@ -80,6 +86,8 @@ export function Editor() {
     detachMorses,
     attachKobu,
     detachKobu,
+    attachUnlock,
+    detachUnlock,
   ]);
 
   const phase = useEditorStore((s) => s.phase);
@@ -92,6 +100,10 @@ export function Editor() {
   const setActiveLayer = useEditorStore((s) => s.setActiveLayer);
   const applyKeyToSelection = useEditorStore((s) => s.applyKeyToSelection);
   const setKey = useEditorStore((s) => s.setKey);
+
+  // Unlock chord highlight: light up the physical keys to hold while unlocking.
+  const unlockChord = useUnlockStore((s) => s.chord);
+  const unlockActive = useUnlockStore((s) => s.status === 'unlocking');
 
   // Subscribe to the whole state for the dirty predicate — re-renders
   // are cheap and the helper closes over the latest snapshot.
@@ -174,6 +186,8 @@ export function Editor() {
     <section className="space-y-5">
       <EditorToolbar />
 
+      <UnlockPanel />
+
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h3 className="text-sm text-zinc-500 dark:text-zinc-400">
           レイヤー{' '}
@@ -221,6 +235,8 @@ export function Editor() {
           keymap={layerKeymap}
           selected={currentSelected ? { row: currentSelected.row, col: currentSelected.col } : null}
           isDirty={(row, col) => isCellDirty(editorState, { layer: activeLayer, row, col })}
+          chordCells={unlockChord}
+          chordActive={unlockActive}
           onCellClick={(row, col) => {
             selectCell({ layer: activeLayer, row, col });
           }}
