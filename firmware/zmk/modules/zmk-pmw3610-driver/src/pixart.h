@@ -27,6 +27,13 @@ struct pixart_data {
     int                          async_init_step;
     int                          init_retries; // kobu: restart-from-scratch count on a failed async init (flaky 3-wire SPI read)
 
+    // kobu: periodic force-awake (RUN-mode) re-assert, DECOUPLED from motion
+    // reporting. Compiled unconditionally (independent of the optional poll) so
+    // a pure-IRQ scroll ball still self-heals a dropped RUN-mode write WITHOUT
+    // the report_data dx/dy accumulator + REPORT_INTERVAL_MIN purge race that a
+    // report_data-based poll introduces.
+    struct k_work_delayable      reassert_work;
+
 #if CONFIG_PMW3610_POLL_INTERVAL_MS > 0
     struct k_work_delayable      poll_work; // kobu: IRQ-independent periodic motion poll
 #endif

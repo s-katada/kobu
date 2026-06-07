@@ -49,6 +49,12 @@ static const int32_t async_init_delay[ASYNC_INIT_STEP_COUNT] = {
 #define PMW3610_INIT_MAX_RETRIES   100
 #define PMW3610_INIT_RETRY_DELAY_MS 50
 
+// kobu: how often to re-assert force-awake (RUN mode) from the dedicated
+// reassert_work (see pmw3610_reassert_work_callback). Matches the old poll-based
+// ~500 ms cadence, but runs independent of CONFIG_PMW3610_POLL_INTERVAL_MS so a
+// pure-IRQ ball keeps the RUN-mode safety net without a report_data poll.
+#define PMW3610_REASSERT_INTERVAL_MS 500
+
 static int pmw3610_async_init_power_up(const struct device *dev);
 static int pmw3610_async_init_clear_ob1(const struct device *dev);
 static int pmw3610_async_init_check_ob1(const struct device *dev);
@@ -434,6 +440,10 @@ static void pmw3610_async_init(struct k_work *work) {
             data->ready = true; // sensor is ready to work
             LOG_INF("PMW3610 initialized");
             pmw3610_set_interrupt(dev, true);
+            // kobu: start the decoupled force-awake re-assert watchdog (RUN-mode
+            // pinning, no report_data => no slow-roll purge race). Runs for both
+            // the pure-IRQ scroll ball and the polled pointer ball.
+            k_work_schedule(&data->reassert_work, K_MSEC(PMW3610_REASSERT_INTERVAL_MS));
 #if CONFIG_PMW3610_POLL_INTERVAL_MS > 0
             k_work_schedule(&data->poll_work, K_MSEC(CONFIG_PMW3610_POLL_INTERVAL_MS));
             LOG_INF("PMW3610 polling every %d ms (kobu MOTION-independent)", CONFIG_PMW3610_POLL_INTERVAL_MS);
@@ -563,13 +573,45 @@ static int pmw3610_report_data(const struct device *dev) {
     return err;
 }
 
-/* kobu: IRQ-independent SPI polling. The kobu PCB's MOTION/P0_28 line is
- * unreliable (the RMK firmware deliberately avoids it and polls instead), so the
- * MOTION IRQ may never fire and an IRQ-only driver would emit nothing. When
- * CONFIG_PMW3610_POLL_INTERVAL_MS > 0 this delayable work reads the motion burst
- * over SPI every N ms regardless of the IRQ. pmw3610_report_data self-gates on
- * zero delta; the IRQ path is left active and both run on the system workqueue
- * (serialized, so report_data is never re-entered). */
+/* kobu: periodically RE-ASSERT force-awake (RUN mode), DECOUPLED from the motion
+ * report path. The kobu LEFT sensor's flaky 3-wire SDIO can corrupt the one-shot
+ * init write that forces RUN mode, leaving the sensor in a REST mode whose slow
+ * sample rate ignores SLOW rolls (scroll "dies", recovered only by an
+ * activity-change re-assert via on_activity_state — i.e. moving the OTHER ball).
+ * Re-writing the PERFORMANCE register every ~500 ms self-heals that within half a
+ * second. CRITICAL: this does NOT call pmw3610_report_data and does NOT read the
+ * MOTION_BURST register, so unlike a report_data-based poll it neither touches
+ * the dx/dy/last_smp_time accumulator (no REPORT_INTERVAL_MIN purge race that
+ * silently drops slow-roll counts) nor consumes/de-asserts the MOTION pin (no
+ * stealing of a sparse slow-motion IRQ). It only reads+conditionally-writes
+ * PERFORMANCE reg 0x11. pmw3610_set_performance() self-gates on config->force_awake
+ * (no-op otherwise) and is idempotent, so this is cheap and safe on both halves.
+ * Runs unconditionally (independent of CONFIG_PMW3610_POLL_INTERVAL_MS) so the
+ * pure-IRQ scroll ball keeps the RUN-mode safety net. */
+static void pmw3610_reassert_work_callback(struct k_work *work) {
+    struct k_work_delayable *work2 = (struct k_work_delayable *)work;
+    struct pixart_data *data = CONTAINER_OF(work2, struct pixart_data, reassert_work);
+    const struct device *dev = data->dev;
+
+    if (data->ready) {
+        pmw3610_set_performance(dev, true);
+    }
+    k_work_schedule(&data->reassert_work, K_MSEC(PMW3610_REASSERT_INTERVAL_MS));
+}
+
+/* kobu: IRQ-independent SPI polling. When CONFIG_PMW3610_POLL_INTERVAL_MS > 0 this
+ * delayable work reads the motion burst over SPI every N ms regardless of the
+ * IRQ, as a fallback for an unreliable MOTION line. pmw3610_report_data self-gates
+ * on zero delta; the IRQ path is left active and both run on the system workqueue
+ * (serialized, so report_data is never re-entered).
+ *
+ * IMPORTANT (kobu scroll-freeze fix): because report_data shares function-static
+ * dx/dy/last_smp_time and has a REPORT_INTERVAL_MIN purge, a poll cadence ABOVE
+ * REPORT_INTERVAL_MIN (8 ms) trips that purge on every tick and zeroes
+ * partially-accumulated SLOW-roll counts before they emit — freezing slow scroll.
+ * So if you enable this poll, keep the interval <= REPORT_INTERVAL_MIN. The LEFT
+ * scroll ball runs pure-IRQ (POLL=0) to avoid this entirely; the force-awake
+ * re-assert it used to rely on now lives in pmw3610_reassert_work_callback above. */
 #if CONFIG_PMW3610_POLL_INTERVAL_MS > 0
 static void pmw3610_poll_work_callback(struct k_work *work) {
     struct k_work_delayable *work2 = (struct k_work_delayable *)work;
@@ -578,21 +620,6 @@ static void pmw3610_poll_work_callback(struct k_work *work) {
 
     if (data->ready) {
         pmw3610_report_data(dev);
-
-        // kobu: periodically RE-ASSERT force-awake (RUN mode). The kobu LEFT
-        // sensor's flaky 3-wire SDIO can corrupt the one-shot init write that
-        // forces RUN mode, leaving the sensor in a REST mode whose slow sample
-        // rate ignores SLOW rolls (only fast motion is caught) — confirmed on
-        // hardware (fast scroll works, slow doesn't, varies per boot). Re-writing
-        // the performance register every ~500 ms self-heals that within half a
-        // second. pmw3610_set_performance() self-gates on config->force_awake
-        // (no-op otherwise) and is idempotent (reads first, writes only if the
-        // RUN bits aren't already set), so this is cheap and safe on both halves.
-        static int reassert_ticks = 0;
-        if (++reassert_ticks >= (500 / CONFIG_PMW3610_POLL_INTERVAL_MS)) {
-            reassert_ticks = 0;
-            pmw3610_set_performance(dev, true);
-        }
     }
     k_work_schedule(&data->poll_work, K_MSEC(CONFIG_PMW3610_POLL_INTERVAL_MS));
 }
@@ -660,6 +687,9 @@ static int pmw3610_init(const struct device *dev) {
 
     // init trigger handler work
     k_work_init(&data->trigger_work, pmw3610_work_callback);
+
+    // kobu: init the decoupled force-awake re-assert watchdog (unconditional)
+    k_work_init_delayable(&data->reassert_work, pmw3610_reassert_work_callback);
 
 #if CONFIG_PMW3610_POLL_INTERVAL_MS > 0
     // kobu: init the IRQ-independent poll work (unreliable MOTION line)
