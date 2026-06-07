@@ -1,8 +1,19 @@
-name: Firmware
+name: Firmware (RMK + ZMK)
+
+# Builds BOTH firmwares for kobu in clearly-separated jobs so the Actions UI
+# plainly shows which is which:
+#   * build-rmk  — the RMK (Rust/Vial) firmware           → central/peripheral(+reset)
+#   * build-zmk  — the ZMK (zmk-nix) firmware             → kobu_left/right/reset
+#   * release    — publishes BOTH to the rolling `firmware-latest` pre-release
+# The web editors consume this: the RMK (Vial) editor installs the RMK assets,
+# the ZMK editor installs the ZMK assets, and the ZMK editor's "detailed
+# settings" feature dispatches THIS workflow (by filename) with overrides — a
+# custom build tweaks ZMK config only, so it runs build-zmk ALONE (build-rmk is
+# skipped) and the run then carries a single zmk artifact for the editor to fetch.
 
 # Custom (web-app) builds set `build_id`; echo it into the run name so the
-# ZMK editor's Worker can locate this run when polling.
-run-name: ${{ inputs.build_id && format('kobu custom build {0}', inputs.build_id) || 'Firmware' }}
+# ZMK editor's Worker can locate this run when polling (it matches on build_id).
+run-name: ${{ inputs.build_id && format('kobu custom ZMK build {0}', inputs.build_id) || 'Firmware (RMK + ZMK)' }}
 
 on:
   push:
@@ -37,21 +48,16 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build RMK + ZMK UF2s
+  # ── RMK firmware (firmware/rmk, Rust) ─────────────────────────────────────
+  build-rmk:
+    name: Build RMK firmware (Rust / Vial)
+    # Custom (web-app override) builds tweak ZMK config only, so skip RMK there:
+    # a custom dispatch then runs build-zmk alone and the run carries exactly one
+    # (zmk) artifact for the editor to fetch.
+    if: ${{ inputs.overrides_b64 == '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      # Custom (web-app) build: decode the overrides and patch the kobu ZMK
-      # config before building so the produced UF2s carry the user's CPI /
-      # timing / scroll settings. No-op on normal push / PR builds.
-      - name: Apply ZMK editor overrides (custom build)
-        if: inputs.overrides_b64
-        run: |
-          set -euxo pipefail
-          echo "${{ inputs.overrides_b64 }}" | base64 -d > /tmp/zmk-overrides.json
-          python3 scripts/zmk-apply-overrides.py /tmp/zmk-overrides.json
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
@@ -71,7 +77,6 @@ jobs:
       - name: Install cargo-hex-to-uf2
         run: nix develop .#firmware --command cargo install --locked cargo-hex-to-uf2
 
-      # ── RMK firmware (firmware/rmk, Rust) ───────────────────────────────────
       - name: Build RMK central and peripheral
         run: |
           nix develop .#firmware --command bash -eux <<'EOF'
@@ -117,10 +122,42 @@ jobs:
           sed -i 's/^clear_layout = true$/clear_layout = false/' keyboard.toml
           EOF
 
-      # ── ZMK firmware (firmware/zmk, zmk-nix) ────────────────────────────────
-      # Produces kobu_left.uf2 (central + Studio), kobu_right.uf2 (peripheral)
-      # and kobu_reset.uf2 (settings_reset). `cp -L` dereferences the nix-store
-      # symlinks into a plain dir so upload-artifact / gh release can read them.
+      - name: Upload RMK firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kobu-firmware-rmk
+          path: |
+            firmware/rmk/central.uf2
+            firmware/rmk/peripheral.uf2
+            firmware/rmk/central-reset.uf2
+            firmware/rmk/peripheral-reset.uf2
+          if-no-files-found: error
+
+  # ── ZMK firmware (firmware/zmk, zmk-nix) ──────────────────────────────────
+  # Produces kobu_left.uf2 (central + Studio), kobu_right.uf2 (peripheral) and
+  # kobu_reset.uf2 (settings_reset). Runs on every event — including custom
+  # (override) dispatches from the ZMK editor.
+  build-zmk:
+    name: Build ZMK firmware (zmk-nix)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Custom (web-app) build: decode the overrides and patch the kobu ZMK
+      # config before building so the produced UF2s carry the user's CPI /
+      # timing / scroll settings. No-op on normal push / PR builds.
+      - name: Apply ZMK editor overrides (custom build)
+        if: inputs.overrides_b64
+        run: |
+          set -euxo pipefail
+          echo "${{ inputs.overrides_b64 }}" | base64 -d > /tmp/zmk-overrides.json
+          python3 scripts/zmk-apply-overrides.py /tmp/zmk-overrides.json
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      # `cp -L` dereferences the nix-store symlinks into a plain dir so
+      # upload-artifact / gh release can read them.
       - name: Build ZMK firmware (both halves + settings-reset)
         run: |
           nix build .#zmk-bundle -o result-zmk --print-build-logs
@@ -129,34 +166,48 @@ jobs:
           cp -L result-zmk/kobu_right.uf2 zmk-out/kobu_right.uf2
           cp -L result-zmk/kobu_reset.uf2 zmk-out/kobu_reset.uf2
 
-      - name: Upload firmware artifacts
+      - name: Upload ZMK firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kobu-firmware
+          name: kobu-firmware-zmk
           path: |
-            firmware/rmk/central.uf2
-            firmware/rmk/peripheral.uf2
-            firmware/rmk/central-reset.uf2
-            firmware/rmk/peripheral-reset.uf2
             zmk-out/kobu_left.uf2
             zmk-out/kobu_right.uf2
             zmk-out/kobu_reset.uf2
           if-no-files-found: error
 
-      # Publish a rolling pre-release tagged `firmware-latest` carrying BOTH the
-      # RMK and ZMK images so the kobu-editor web app (and humans) can fetch the
-      # latest UF2 over the public Releases API. Tag + assets are recreated on
-      # every successful main build.
-      # Custom (overrides) builds must NOT overwrite the rolling release —
-      # the web app fetches their UF2 from the run artifact instead.
+  # ── Publish the rolling firmware-latest pre-release (RMK + ZMK) ───────────
+  # Only on normal main builds — NOT on PRs and NOT on custom (overrides) builds
+  # (the web app fetches a custom build's UF2 from the run artifact instead, so
+  # it must not overwrite the rolling release). build-rmk is skipped on custom
+  # builds, so this `needs`-gated job is skipped there too — consistent with the
+  # `if` below.
+  release:
+    name: Publish firmware-latest pre-release
+    needs: [build-rmk, build-zmk]
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && inputs.overrides_b64 == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download RMK + ZMK firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
       - name: Publish firmware-latest pre-release
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && !inputs.overrides_b64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euxo pipefail
           SHA_SHORT=$(git rev-parse --short HEAD)
           DATE_UTC=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          # Collect every UF2 from both downloaded artifacts. gh names each
+          # release asset by basename, so the asset names (central.uf2,
+          # kobu_left.uf2, …) the web editors fetch are preserved regardless of
+          # the artifacts' internal directory layout.
+          mapfile -t UF2S < <(find dist -name '*.uf2' | sort)
+          test "${#UF2S[@]}" -eq 7  # 4 RMK + 3 ZMK; fail loudly if a build dropped one
           NOTES=$(cat <<NOTE
           自動ビルドされた最新版です（RMK / ZMK 両ファームウェア）。
 
@@ -184,9 +235,7 @@ jobs:
           # next `gh release create` doesn't conflict.
           gh release delete firmware-latest --yes --cleanup-tag || true
           gh release create firmware-latest \
-            firmware/rmk/central.uf2 firmware/rmk/peripheral.uf2 \
-            firmware/rmk/central-reset.uf2 firmware/rmk/peripheral-reset.uf2 \
-            zmk-out/kobu_left.uf2 zmk-out/kobu_right.uf2 zmk-out/kobu_reset.uf2 \
+            "${UF2S[@]}" \
             --title "Latest firmware build ($SHA_SHORT)" \
             --notes "$NOTES" \
             --prerelease \
