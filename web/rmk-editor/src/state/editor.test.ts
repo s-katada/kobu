@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { KeyboardLayoutDef } from '../protocol/handshake';
-import { intoVialPacket, type VialPacket } from '../transport/types';
+import { intoVialPacket, TransportError, type VialPacket } from '../transport/types';
 import type { WebHidTransport } from '../transport/webhid';
 import { selectDirtyLayerMask, selectIsDirty, useEditorStore } from './editor';
 
@@ -18,6 +18,12 @@ class FakeTransport {
   /** Snapshot the firmware "factory defaults" — used by DynamicKeymapReset. */
   defaults: number[];
   locked = false;
+  /** Number of GetUnlockStatus calls seen so far. */
+  unlockChecks = 0;
+  /** When set to N, the Nth (1-based) GetUnlockStatus reports locked — lets a
+   *  test simulate a lock engaging mid-save (unlocked at the pre-check, locked
+   *  at the post-write verification). */
+  lockOnUnlockCheck: number | null = null;
   failOn: number | null = null;
   /** When non-null, every sendAndReceive throws this many times before
    *  succeeding. The test sets it to simulate transient I/O failures. */
@@ -72,7 +78,10 @@ class FakeTransport {
       reply.set(packet.subarray(0, 6));
     } else if (cmd === 0xfe && packet[1] === 0x05) {
       // Vial GetUnlockStatus
-      reply[0] = this.locked ? 1 : 0;
+      this.unlockChecks += 1;
+      const locked =
+        this.lockOnUnlockCheck !== null ? this.unlockChecks >= this.lockOnUnlockCheck : this.locked;
+      reply[0] = locked ? 1 : 0;
       reply[1] = 0;
       reply[2] = 0xff;
       reply[3] = 0xff;
@@ -191,6 +200,48 @@ describe('useEditorStore', () => {
     // still dirty so the user can retry.
     expect(state.baseline?.[0]?.[0]?.[0]).toBe(0x29);
     expect(state.local?.[0]?.[0]?.[0]).toBe(0x29);
+  });
+
+  it('save() does NOT advance the baseline if the firmware locks mid-save', async () => {
+    const fake = new FakeTransport();
+    // Unlocked at the pre-save check (1st), locked at the post-write verify (2nd).
+    fake.lockOnUnlockCheck = 2;
+    await useEditorStore.getState().attach(fake as unknown as WebHidTransport, definition());
+
+    useEditorStore.getState().setKey({ layer: 0, row: 0, col: 0 }, 0x29);
+    await useEditorStore.getState().save();
+
+    const state = useEditorStore.getState();
+    expect(state.phase.kind).toBe('error');
+    // Writes are unverified (lock engaged) → baseline must NOT advance, so the
+    // edit stays dirty for the user to unlock and retry rather than silently lost.
+    expect(selectIsDirty(state)).toBe(true);
+    expect(state.local?.[0]?.[0]?.[0]).toBe(0x29);
+    expect(state.baseline?.[0]?.[0]?.[0]).not.toBe(0x29);
+  });
+
+  it('save() reports a transport-loss message and keeps edits when the verify probe fails', async () => {
+    const fake = new FakeTransport();
+    await useEditorStore.getState().attach(fake as unknown as WebHidTransport, definition());
+    useEditorStore.getState().setKey({ layer: 0, row: 0, col: 0 }, 0x29);
+    // Let the write loop succeed, then make the post-write GetUnlockStatus throw.
+    const realSend = fake.sendAndReceive.bind(fake);
+    let writesDone = false;
+    fake.sendAndReceive = async (packet) => {
+      if (writesDone && packet[0] === 0xfe && packet[1] === 0x05) {
+        throw new TransportError('disconnected', 'gone');
+      }
+      const r = await realSend(packet);
+      if (packet[0] === 0x05) writesDone = true;
+      return r;
+    };
+
+    await useEditorStore.getState().save();
+    const state = useEditorStore.getState();
+    expect(state.phase.kind).toBe('error');
+    if (state.phase.kind === 'error') expect(state.phase.message).toMatch(/切断されました/);
+    // Unverified → not advanced → still dirty.
+    expect(selectIsDirty(state)).toBe(true);
   });
 
   it('setActiveLayer clamps to the available layers and clears selection', async () => {

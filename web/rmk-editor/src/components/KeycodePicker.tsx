@@ -18,7 +18,7 @@
  * filter latency.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { KeyboardLayoutDef } from '../protocol/handshake';
 import {
   BASE_CATALOGUE,
@@ -75,9 +75,23 @@ export function KeycodePicker({
   onClose,
 }: KeycodePickerProps) {
   const currentLabel = labelForKeycode(current, { definition });
+
+  // Modal focus management: focus the search box on open and restore focus to
+  // whatever opened the dialog on close, so keyboard users aren't dropped at
+  // the top of the document.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    const search = dialogRef.current?.querySelector<HTMLInputElement>('input[type="search"]');
+    search?.focus();
+    return () => opener?.focus?.();
+  }, []);
+
   return (
     <div
+      ref={dialogRef}
       role="dialog"
+      aria-modal="true"
       aria-label="キーコードを選択"
       className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 p-4"
       onClick={onClose}
@@ -89,7 +103,7 @@ export function KeycodePicker({
         onClick={(e) => e.stopPropagation()}
         onKeyDown={(e) => e.stopPropagation()}
         role="document"
-        className="w-full max-w-4xl bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-lg shadow-xl border border-zinc-200 dark:border-zinc-800 overflow-hidden"
+        className="w-full max-w-4xl max-h-[90vh] overflow-y-auto bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 rounded-lg shadow-xl border border-zinc-200 dark:border-zinc-800"
       >
         <header className="flex items-center justify-between border-b border-zinc-200 dark:border-zinc-800 px-4 py-3">
           <div>
@@ -272,6 +286,7 @@ function KeyGrid({ items, onPick, definition }: KeyGridProps) {
             }}
             onClick={() => onPick(meta.code)}
             title={meta.description}
+            aria-label={label.long}
             className={[
               'group h-14 rounded-md border text-xs font-medium flex flex-col items-center justify-center px-1 text-center',
               'transition-[transform,box-shadow,background-color] duration-100',

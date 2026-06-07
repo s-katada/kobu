@@ -23,6 +23,7 @@
  */
 
 import { create } from 'zustand';
+import { describeWriteError, isTransportLost } from '../lib/saveError';
 import type { KeyboardLayoutDef } from '../protocol/handshake';
 import {
   fetchKeymap,
@@ -295,24 +296,52 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         sent++;
         set({ phase: { kind: 'saving', sent, total: dirty.length } });
       }
-      set({
-        baseline: updatedBaseline,
-        undoStack: [],
-        redoStack: [],
-        phase: { kind: 'ready' },
-      });
     } catch (err) {
-      // Partial-success path: keep the writes that did land in the baseline
-      // (firmware persists each SetKeyCode immediately), surface the
-      // failure, but leave the rest of the local edits intact for retry.
+      // A write itself failed mid-loop. Keep the writes that DID land in the
+      // baseline (firmware persists each SetKeyCode immediately), surface the
+      // failure, and leave the rest of the local edits dirty for retry.
       set({
         baseline: updatedBaseline,
         phase: {
           kind: 'error',
-          message: `${dirty.length} 件中 ${sent} 件目で保存が失敗しました: ${err}`,
+          message: isTransportLost(err)
+            ? describeWriteError(err)
+            : `${dirty.length} 件中 ${sent} 件目で保存が失敗しました: ${describeWriteError(err)}`,
         },
       });
+      return;
     }
+
+    // All writes were issued without error. Verify the firmware stayed unlocked
+    // through the whole loop — RMK SILENTLY ignores SetKeyCode while locked (no
+    // error), so a lock that engaged mid-save would have dropped writes while
+    // every call "succeeded". This runs in its OWN try: if the verification
+    // probe itself fails (e.g. transport lost just after the loop), we must NOT
+    // advance the baseline — the writes are unverified, so we keep everything
+    // dirty so the user can reconnect and retry rather than silently lose edits.
+    try {
+      const after = await fetchUnlockStatus(transport);
+      if (after.locked) {
+        set({
+          phase: {
+            kind: 'error',
+            message:
+              'デバイスがロックされたため、変更が反映されていない可能性があります。上のバナーからアンロックして再保存してください。',
+          },
+        });
+        return;
+      }
+    } catch (err) {
+      set({ phase: { kind: 'error', message: describeWriteError(err) } });
+      return;
+    }
+
+    set({
+      baseline: updatedBaseline,
+      undoStack: [],
+      redoStack: [],
+      phase: { kind: 'ready' },
+    });
   },
 
   reloadFromDevice: async () => {

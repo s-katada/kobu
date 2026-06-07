@@ -11,7 +11,7 @@
  * the dirty mask, and the pending-cell count.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { selectDirtyLayerMask, selectIsDirty, useEditorStore } from '../state/editor';
 
 export function EditorToolbar() {
@@ -28,6 +28,21 @@ export function EditorToolbar() {
   const dirty = useEditorStore(selectIsDirty);
   const undoCount = useEditorStore((s) => s.undoStack.length);
   const redoCount = useEditorStore((s) => s.redoStack.length);
+
+  // Announce a successful save (saving -> ready) via a polite live region, then
+  // auto-clear. Screen-reader + sighted feedback that the write actually landed
+  // (the Save button otherwise just flips to the static "保存済み").
+  const [savedNote, setSavedNote] = useState('');
+  const prevPhaseKind = useRef(phase.kind);
+  useEffect(() => {
+    if (prevPhaseKind.current === 'saving' && phase.kind === 'ready') {
+      setSavedNote('保存しました');
+      const id = setTimeout(() => setSavedNote(''), 4000);
+      prevPhaseKind.current = phase.kind;
+      return () => clearTimeout(id);
+    }
+    prevPhaseKind.current = phase.kind;
+  }, [phase.kind]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -156,7 +171,18 @@ export function EditorToolbar() {
       </div>
 
       {phase.kind === 'error' && (
-        <div className="w-full text-sm text-rose-700 dark:text-rose-400">{phase.message}</div>
+        <div role="alert" className="w-full text-sm text-rose-700 dark:text-rose-400">
+          {phase.message}
+        </div>
+      )}
+
+      {/* Polite live region: announces save success (and progress) without
+          stealing focus. Always present so the announcement is reliably read. */}
+      <div aria-live="polite" className="sr-only">
+        {phase.kind === 'saving' ? `保存中 ${phase.sent}/${phase.total}` : savedNote}
+      </div>
+      {savedNote && (
+        <div className="w-full text-sm text-emerald-700 dark:text-emerald-400">✓ {savedNote}</div>
       )}
     </div>
   );

@@ -12,7 +12,7 @@ hardware at [`../pcb/`](../pcb/).
 
 | Feature | Status |
 |---|---|
-| Read / write keymap (4 layers × 4×10 matrix) | ✅ |
+| Read / write keymap (all firmware layers × 4×10 matrix; layer count read from the device) | ✅ |
 | Categorised keycode picker (basic / mods / layers / mouse / media / kobu-specific BT keys) | ✅ |
 | Layer 3 dedicated BLE-profile panel | ✅ |
 | Macros (Vial advanced format — tap / press / release / delay) | ✅ |
