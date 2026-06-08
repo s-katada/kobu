@@ -239,7 +239,16 @@ morses = [
 # keymap+behavior and rewrites from this file, KEEPS BLE bonds), then flash the
 # normal kobu-rmk-central.uf2.
 [behavior.morse.profiles]
-FH = { hold_on_other_press = true, hold_timeout = "350ms", gap_timeout = "200ms" }
+# Round 27: matched to ZMK/KobitoKey's "tap-preferred" hold-tap flavor to fix the
+# "tap と hold が紛らわしい / 誤爆" feel. `hold_on_other_press = false` means pressing
+# another key during the hold window NO LONGER forces a hold — the thumb key only
+# becomes a hold (layer/mod) after `hold_timeout`, so a fast roll (thumb-tap then
+# next key) reliably yields the TAP instead of an accidental layer/modifier (the
+# ZMK tap-preferred behaviour the user finds smooth). Trade-off: to USE the layer
+# you now HOLD the thumb deliberately (~200ms) rather than quick-chording.
+# hold_timeout 350->200ms matches ZMK's tapping-term. Tuning: if resting a finger
+# on the thumb key falsely triggers the layer, raise hold_timeout toward 250-300ms.
+FH = { hold_on_other_press = false, hold_timeout = "200ms", gap_timeout = "200ms" }
 
 [[behavior.macro.macros]]
 operations = [

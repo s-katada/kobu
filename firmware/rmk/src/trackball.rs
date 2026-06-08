@@ -29,6 +29,7 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::signal::Signal;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
 use rmk::channel::KEYBOARD_REPORT_CHANNEL;
+use rmk::descriptor::WheelMouseReport;
 use rmk::event::{Axis, Event};
 use rmk::hid::Report;
 use rmk::input_device::{InputDevice, InputProcessor, ProcessResult};
@@ -362,17 +363,18 @@ const SCROLL_MAX_UNITS: i32 = 3;
 
 /// Ceiling on "owed" (accumulated-but-unsent) travel, in milli-counts.
 ///
-/// This is the single most important number for the fast-roll feel. A
-/// fast ball spin produces motion far beyond what the BLE HID link can
-/// carry (≈66–133 reports/s × ±127 counts). The earlier design tried to
-/// preserve *all* of it by splitting into many ±127 reports and queuing
-/// them — which buried the cursor under a multi-hundred-ms backlog that
-/// kept gliding after the ball stopped ("超もっさり"). Instead we cap the
-/// owed travel at ~2 reports' worth and drop the rest: the cursor stays
-/// glued to the ball (≤~2 BLE intervals of catch-up, ~15–30 ms) and
-/// macOS pointer acceleration turns the resulting saturated 127-count
-/// reports into a genuinely fast cursor — fast *and* responsive.
-const MAX_PENDING_MILLI: i32 = 254 * CPI_DENOM;
+/// Round 26: the mouse HID report is now 16-bit (`WheelMouseReport`, ±32767 per
+/// axis, ZMK parity), so one report per BLE connection event carries the FULL
+/// coalesced delta — there is no longer a host_rate × 127 cursor-speed ceiling
+/// that the old i8 report forced us to drop motion against (the "のろのろ" /
+/// under-travel root cause). So cap the owed travel at a full i16 axis: realistic
+/// motion never reaches it (a 100 cm/s flick banks only ~600 counts per 15 ms
+/// interval and the `len()==0`-gated emit drains the whole bank each interval),
+/// and a rare multi-hundred-ms channel stall is emitted as ONE catch-up report
+/// (an instant correct jump to where the ball actually went — like ZMK), not a
+/// gliding backlog. The earlier 254-count cap existed only because an i8 report
+/// could not carry more; with i16 it would needlessly throw motion away.
+const MAX_PENDING_MILLI: i32 = 32767 * CPI_DENOM;
 
 /// Motion-freeze window after any mouse-button PRESS edge (click-shake guard).
 /// Pressing a layer-4 MouseBtn makes finger pressure incidentally roll the ball
@@ -383,6 +385,21 @@ const MAX_PENDING_MILLI: i32 = 254 * CPI_DENOM;
 /// the press rising edge, never re-arming during a sustained hold, so click-drag
 /// is unaffected.
 const CLICK_FREEZE: Duration = Duration::from_millis(40);
+
+/// Smart conn-param re-assert (round 27): host interval (µs) above which we
+/// consider the macOS link "relaxed for power-save" and worth nudging back to
+/// the fast HID range. The healthy resting grant is ~15 ms (15000); macOS
+/// relaxes a bonded idle link toward ~30-50 ms. 18 ms cleanly separates the two,
+/// so a healthy 15 ms link never triggers a re-assert (no churn) but a genuine
+/// power-save relaxation does. See `PointerProcessor::process`.
+const REASSERT_INTERVAL_THRESHOLD_US: u32 = 18_000;
+
+/// Minimum spacing between smart re-asserts. The re-assert is fired only while
+/// the ball is ACTIVELY moving AND the link is relaxed, and never more than once
+/// per this window — so it can never degrade into the old periodic 2 s conn-param
+/// churn (which R24 removed). One nudge snaps macOS back within a connection
+/// event or two (~30-100 ms) instead of waiting ~5 s for macOS to do it itself.
+const REASSERT_COOLDOWN: Duration = Duration::from_secs(2);
 
 /// Per-emit deadzone (in HID counts) applied ONLY while a mouse button is held:
 /// swallow ≤ this many counts of tremor so a held-button finger can't jitter the
@@ -611,6 +628,11 @@ pub struct PointerProcessor<
     /// Deadline until which pointer motion is suppressed after a button-press
     /// edge (click-shake guard). `None` when not freezing.
     freeze_until: Option<Instant>,
+    /// Last time we asked the host link to re-tighten (smart re-assert,
+    /// round 27). `None` until the first re-assert. Used to rate-limit the
+    /// re-assert to at most once per `REASSERT_COOLDOWN` so it can never become
+    /// the old periodic conn-param churn.
+    last_reassert: Option<Instant>,
 }
 
 impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCODER: usize>
@@ -623,6 +645,7 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
             pend_y: 0,
             prev_buttons: 0,
             freeze_until: None,
+            last_reassert: None,
         }
     }
 }
@@ -702,8 +725,11 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                 }
                 self.pend_x = self.pend_x.clamp(-MAX_PENDING_MILLI, MAX_PENDING_MILLI);
                 self.pend_y = self.pend_y.clamp(-MAX_PENDING_MILLI, MAX_PENDING_MILLI);
-                let mut dx = (self.pend_x / CPI_DENOM).clamp(-127, 127);
-                let mut dy = (self.pend_y / CPI_DENOM).clamp(-127, 127);
+                // 16-bit clamp (was ±127 for the old i8 report). One wide report
+                // now carries the full coalesced delta, so the cursor tracks the
+                // ball at any speed instead of saturating at ±127/report.
+                let mut dx = (self.pend_x / CPI_DENOM).clamp(-32767, 32767);
+                let mut dy = (self.pend_y / CPI_DENOM).clamp(-32767, 32767);
                 // Click-shake suppression. pend_* is NOT consumed when suppressed
                 // (consume only happens on a successful send below), so banked
                 // travel survives — a real move begun during the freeze emits the
@@ -719,13 +745,13 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                     dy = 0;
                 }
                 if dx != 0 || dy != 0 {
-                    let report = MouseReport {
+                    let report = WheelMouseReport {
                         // Carry the live held-button state (drag/copy fix): a
                         // bare buttons:0 would release a button held while
                         // dragging. See config::mouse_buttons / build.rs.
                         buttons,
-                        x: dx as i8,
-                        y: dy as i8,
+                        x: dx as i16,
+                        y: dy as i16,
                         wheel: 0,
                         pan: 0,
                     };
@@ -742,7 +768,7 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                     // throughput stays at the host rate while latency halves.
                     if KEYBOARD_REPORT_CHANNEL.len() == 0
                         && KEYBOARD_REPORT_CHANNEL
-                            .try_send(Report::MouseReport(report))
+                            .try_send(Report::MouseReportWide(report))
                             .is_ok()
                     {
                         // Consume only what actually went out; a non-empty
@@ -755,6 +781,30 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                 // configured hold window. `Signal::signal` overwrites any
                 // pending value — we only need the "something happened" edge.
                 PERIPHERAL_ACTIVITY.signal(());
+                // Smart conn-param re-assert (round 27 — the pointer "追従遅延"
+                // fix). macOS relaxes the bonded host link for power-saving after
+                // an idle spell (~15ms -> ~30-50ms); kobu's R24 made conn-params
+                // request-once so nothing pulled it back, and macOS only
+                // re-tightens on its own after ~5s of sustained activity — that
+                // ~5s window is the "lag, then recovers" the user feels. Here, on
+                // an ACTIVE pointer sample (this runs only when motion arrives),
+                // if the live host interval is relaxed past the fast band, wake
+                // the re-assert loop in rmk's set_conn_params (which requests the
+                // 7.5-15ms range) so the link snaps back in ~one connection event
+                // instead of ~5s. Rate-limited to once per REASSERT_COOLDOWN so it
+                // is activity-gated + bounded — NOT the periodic churn R24 removed
+                // (the loop's own >12ms gate still guards the actual request, and
+                // a healthy 15ms link never crosses the 18ms threshold here).
+                if config::host_conn_interval_us() > REASSERT_INTERVAL_THRESHOLD_US {
+                    let due = match self.last_reassert {
+                        Some(t) => now.duration_since(t) >= REASSERT_COOLDOWN,
+                        None => true,
+                    };
+                    if due {
+                        rmk::input_device::battery::KOBU_HOST_CONN_DRIFT.signal(());
+                        self.last_reassert = Some(now);
+                    }
+                }
                 // Keep the auto-mouse layer alive whenever ANY pointer sample
                 // ARRIVES — not only on a successful emit (the old placement),
                 // and not only on raw non-zero motion (that's AUTO_MOUSE_ACTIVITY

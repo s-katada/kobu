@@ -143,6 +143,30 @@ fn main() {
     // neuter both re-assert gates (>13ms → >4s = never fires) so no churn.
     patch_rmk_host_conn_request_once_r24();
 
+    // Round 26 — pointer のろのろ TRUE ROOT CAUSE = the i8 (±127) mouse report.
+    // RMK's mouse HID report is i8 x/y and kobu emits ONE report per BLE
+    // connection event (the len()==0 gate), so the maximum deliverable cursor
+    // speed is host_rate × 127 counts/s ≈ 24 cm/s at the measured ~15ms link.
+    // Roll faster and the excess is dropped at the pend clamp → the cursor
+    // under-travels = のろのろ. ZMK uses 16-bit (±32767) motion so ONE report
+    // per interval carries the full coalesced delta and there is no speed
+    // ceiling. These patches widen RMK's mouse motion to i16 (ZMK parity):
+    //   - descriptor.rs: CompositeReport x/y i8→i16 (report map 111→121 bytes)
+    //   - hid.rs: add Report::MouseReportWide(WheelMouseReport) (16-bit payload)
+    //   - ble_server.rs: mouse characteristic [u8;5]→[u8;7], report_map [u8;121],
+    //     widen the legacy i8 MouseReport arm + add the wide arm (both → 7 bytes)
+    //   - usb/mod.rs: same widening on the USB composite mouse report
+    // kobu's PointerProcessor (trackball.rs) emits MouseReportWide; the i8 path
+    // (keyboard mouse-buttons, scroll wheel, unused rmk processors) is widened
+    // at the serializer so every payload to the now-7-byte characteristic is
+    // byte-consistent with the 16-bit report map. Anchors are pristine text →
+    // order-independent. Changing the report map REQUIRES the host (macOS) to
+    // re-pair. REQUIRES `cargo clean --release -p rmk` (registry-patch gotcha).
+    patch_rmk_descriptor_mouse_i16();
+    patch_rmk_hid_mouse_wide_variant();
+    patch_rmk_ble_server_mouse_i16();
+    patch_rmk_usb_mouse_i16();
+
     generate_vial_config();
 
     let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
@@ -159,6 +183,203 @@ fn main() {
     println!("cargo:rustc-link-arg=-Tdefmt.x");
 
     println!("cargo:rustc-linker=flip-link");
+}
+
+/// Round 26 (mouse-i16, part 1/4): widen `CompositeReport` mouse x/y from i8 to
+/// i16 in the rmk HID report map, and append a 7-byte `WheelMouseReport` wire
+/// payload struct. `CompositeReport::desc()` then declares 16-bit relative X/Y
+/// (REPORT_SIZE 16, logical ±32767) and grows 111 -> 121 bytes (host-verified).
+fn patch_rmk_descriptor_mouse_i16() {
+    const MARKER: &str = "// kobu: CompositeReport mouse x/y widened i8 -> i16 + WheelMouseReport applied";
+    const RMK_VERSION: &str = "0.8.2";
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/descriptor.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} descriptor.rs; mouse-i16 descriptor patch not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("kobu: failed to read {}: {e}", path.display()));
+    if contents.contains(MARKER) {
+        return;
+    }
+    let x_from = "    pub(crate) x: i8,";
+    let y_from = "    pub(crate) y: i8,";
+    if !contents.contains(x_from) || !contents.contains(y_from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} descriptor.rs CompositeReport x/y i8 fields missing in {}; \
+             upstream changed — update firmware/build.rs::patch_rmk_descriptor_mouse_i16",
+            path.display()
+        );
+    }
+    contents = contents.replace(x_from, "    pub(crate) x: i16,");
+    contents = contents.replace(y_from, "    pub(crate) y: i16,");
+    let wheel_struct = r#"
+
+/// kobu: 16-bit relative mouse motion wire payload (7 bytes: buttons + i16 x +
+/// i16 y + i8 wheel + i8 pan). ssmarshal serializes it little-endian/packed to
+/// exactly 7 bytes, matching the report_id 0x01 (mouse) section of
+/// `CompositeReport` once its x/y are widened to i16 above — so the report map
+/// (`CompositeReport::desc()`) and this payload stay byte-consistent.
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub struct WheelMouseReport {
+    pub buttons: u8,
+    pub x: i16,
+    pub y: i16,
+    pub wheel: i8,
+    pub pan: i8,
+}
+"#;
+    contents.push_str(wheel_struct);
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents)
+        .unwrap_or_else(|e| panic!("kobu: failed to write {}: {e}", path.display()));
+}
+
+/// Round 26 (mouse-i16, part 2/4): add a `Report::MouseReportWide` enum variant
+/// carrying the 16-bit `WheelMouseReport`. kobu's PointerProcessor emits this;
+/// the legacy `MouseReport` (i8) variant is kept for mouse-buttons / scroll /
+/// unused rmk processors and widened at the serializer.
+fn patch_rmk_hid_mouse_wide_variant() {
+    const MARKER: &str = "// kobu: Report::MouseReportWide 16-bit variant applied";
+    const RMK_VERSION: &str = "0.8.2";
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/hid.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} hid.rs; mouse-wide variant patch not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("kobu: failed to read {}: {e}", path.display()));
+    if contents.contains(MARKER) {
+        return;
+    }
+    let from = "    /// Mouse hid report\n    MouseReport(MouseReport),";
+    let to = "    /// Mouse hid report\n    MouseReport(MouseReport),\n    /// kobu: high-resolution 16-bit relative mouse motion report\n    MouseReportWide(crate::descriptor::WheelMouseReport),";
+    if !contents.contains(from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} hid.rs Report::MouseReport variant missing in {}; \
+             upstream changed — update firmware/build.rs::patch_rmk_hid_mouse_wide_variant",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents)
+        .unwrap_or_else(|e| panic!("kobu: failed to write {}: {e}", path.display()));
+}
+
+/// Round 26 (mouse-i16, part 3/4): the BLE composite mouse characteristic.
+/// Report map 111 -> 121 bytes, mouse value [u8;5] -> [u8;7], widen the legacy
+/// i8 `MouseReport` write arm to the 7-byte payload, and add the wide arm.
+fn patch_rmk_ble_server_mouse_i16() {
+    const MARKER: &str = "// kobu: BLE mouse characteristic widened to i16 (7-byte) applied";
+    const RMK_VERSION: &str = "0.8.2";
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/ble/ble_server.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} ble_server.rs; mouse-i16 ble patch not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("kobu: failed to read {}: {e}", path.display()));
+    if contents.contains(MARKER) {
+        return;
+    }
+    let rm_msg_from = "expect(\"Failed to convert CompositeReport to [u8; 111]\")";
+    let rm_field_from = "    pub(crate) report_map: [u8; 111],";
+    let char_field_from = "    pub(crate) mouse_report: [u8; 5],";
+    let char_handle_from = "    pub(crate) mouse_report: Characteristic<[u8; 5]>,";
+    let arm_from = "                let mut buf = [0u8; 5];\n                let n = serialize(&mut buf, &mouse_report).map_err(|_| HidError::ReportSerializeError)?;";
+    let wide_arm_anchor = "            Report::MediaKeyboardReport(media_keyboard_report) => {";
+    for frag in [
+        rm_msg_from,
+        rm_field_from,
+        char_field_from,
+        char_handle_from,
+        arm_from,
+        wide_arm_anchor,
+    ] {
+        if !contents.contains(frag) {
+            panic!(
+                "kobu: expected rmk-{RMK_VERSION} ble_server.rs anchor missing in {}: `{frag}`; \
+                 upstream changed — update firmware/build.rs::patch_rmk_ble_server_mouse_i16",
+                path.display()
+            );
+        }
+    }
+    contents = contents.replace(
+        rm_msg_from,
+        "expect(\"Failed to convert CompositeReport to [u8; 121]\")",
+    );
+    contents = contents.replace(rm_field_from, "    pub(crate) report_map: [u8; 121],");
+    contents = contents.replace(char_field_from, "    pub(crate) mouse_report: [u8; 7],");
+    contents = contents.replace(
+        char_handle_from,
+        "    pub(crate) mouse_report: Characteristic<[u8; 7]>,",
+    );
+    contents = contents.replace(
+        arm_from,
+        "                let mut buf = [0u8; 7];\n                let __wide = crate::descriptor::WheelMouseReport {\n                    buttons: mouse_report.buttons,\n                    x: mouse_report.x as i16,\n                    y: mouse_report.y as i16,\n                    wheel: mouse_report.wheel,\n                    pan: mouse_report.pan,\n                };\n                let n = serialize(&mut buf, &__wide).map_err(|_| HidError::ReportSerializeError)?;",
+    );
+    contents = contents.replace(
+        wide_arm_anchor,
+        "            Report::MouseReportWide(mouse_report) => {\n                let mut buf = [0u8; 7];\n                let n = serialize(&mut buf, &mouse_report).map_err(|_| HidError::ReportSerializeError)?;\n                match ::embassy_time::with_timeout(\n                    ::embassy_time::Duration::from_millis(40),\n                    self.mouse_report.notify(self.conn, &buf),\n                )\n                .await\n                {\n                    Ok(r) => r.map_err(|e| {\n                        error!(\"Failed to notify wide mouse report: {:?}\", e);\n                        HidError::BleError\n                    })?,\n                    Err(_) => return Ok(0),\n                };\n                Ok(n)\n            }\n            Report::MediaKeyboardReport(media_keyboard_report) => {",
+    );
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents)
+        .unwrap_or_else(|e| panic!("kobu: failed to write {}: {e}", path.display()));
+}
+
+/// Round 26 (mouse-i16, part 4/4): the USB composite mouse path. Widen the
+/// legacy i8 mouse arm to the 7-byte payload and add the wide arm, so a wired
+/// session stays byte-consistent with the now-16-bit report map.
+fn patch_rmk_usb_mouse_i16() {
+    const MARKER: &str = "// kobu: USB composite mouse widened to i16 (7-byte) applied";
+    const RMK_VERSION: &str = "0.8.2";
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/usb/mod.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} usb/mod.rs; mouse-i16 usb patch not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("kobu: failed to read {}: {e}", path.display()));
+    if contents.contains(MARKER) {
+        return;
+    }
+    let arm_from = "                let n = serialize(&mut buf[1..], &mouse_report).map_err(|_| HidError::ReportSerializeError)?;";
+    let wide_arm_anchor = "            Report::MediaKeyboardReport(media_keyboard_report) => {";
+    if !contents.contains(arm_from) || !contents.contains(wide_arm_anchor) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} usb/mod.rs mouse arm anchors missing in {}; \
+             upstream changed — update firmware/build.rs::patch_rmk_usb_mouse_i16",
+            path.display()
+        );
+    }
+    contents = contents.replace(
+        arm_from,
+        "                let __wide = crate::descriptor::WheelMouseReport {\n                    buttons: mouse_report.buttons,\n                    x: mouse_report.x as i16,\n                    y: mouse_report.y as i16,\n                    wheel: mouse_report.wheel,\n                    pan: mouse_report.pan,\n                };\n                let n = serialize(&mut buf[1..], &__wide).map_err(|_| HidError::ReportSerializeError)?;",
+    );
+    contents = contents.replace(
+        wide_arm_anchor,
+        "            Report::MouseReportWide(mouse_report) => {\n                let mut buf: [u8; 9] = [0; 9];\n                buf[0] = CompositeReportType::Mouse as u8;\n                let n = serialize(&mut buf[1..], &mouse_report).map_err(|_| HidError::ReportSerializeError)?;\n                self.other_writer\n                    .write(&buf[0..n + 1])\n                    .await\n                    .map_err(HidError::UsbEndpointError)?;\n                Ok(n)\n            }\n            Report::MediaKeyboardReport(media_keyboard_report) => {",
+    );
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents)
+        .unwrap_or_else(|e| panic!("kobu: failed to write {}: {e}", path.display()));
 }
 
 fn generate_vial_config() {
