@@ -154,7 +154,7 @@ export function useFirmwareReleases(): UseFirmwareReleases {
   };
 }
 
-/** Find an asset by name (e.g. "central.uf2"). */
+/** Find an asset by name (e.g. "kobu-rmk-central.uf2"). */
 export function findAsset(release: FirmwareRelease, name: string): FirmwareAsset | undefined {
   return release.assets.find((a) => a.name === name);
 }

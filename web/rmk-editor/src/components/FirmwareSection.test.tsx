@@ -33,16 +33,16 @@ function fixtureLatestRelease() {
       body: 'Released notes content.',
       assets: [
         {
-          name: 'central.uf2',
+          name: 'kobu-rmk-central.uf2',
           size: 902656,
           browser_download_url:
-            'https://github.com/s-katada/kobu/releases/download/firmware-latest/central.uf2',
+            'https://github.com/s-katada/kobu/releases/download/firmware-latest/kobu-rmk-central.uf2',
         },
         {
-          name: 'peripheral.uf2',
+          name: 'kobu-rmk-peripheral.uf2',
           size: 581632,
           browser_download_url:
-            'https://github.com/s-katada/kobu/releases/download/firmware-latest/peripheral.uf2',
+            'https://github.com/s-katada/kobu/releases/download/firmware-latest/kobu-rmk-peripheral.uf2',
         },
       ],
     },
@@ -90,16 +90,16 @@ describe('FirmwareSection', () => {
     expect(screen.getByText('latest')).toBeInTheDocument();
 
     // Download fallback links carry the correct href + download attrs.
-    const centralLink = screen.getByRole('link', { name: /central\.uf2/ });
+    const centralLink = screen.getByRole('link', { name: /kobu-rmk-central\.uf2/ });
     expect(centralLink).toHaveAttribute(
       'href',
-      'https://github.com/s-katada/kobu/releases/download/firmware-latest/central.uf2',
+      'https://github.com/s-katada/kobu/releases/download/firmware-latest/kobu-rmk-central.uf2',
     );
-    expect(centralLink).toHaveAttribute('download', 'central.uf2');
-    const peripheralLink = screen.getByRole('link', { name: /peripheral\.uf2/ });
+    expect(centralLink).toHaveAttribute('download', 'kobu-rmk-central.uf2');
+    const peripheralLink = screen.getByRole('link', { name: /kobu-rmk-peripheral\.uf2/ });
     expect(peripheralLink).toHaveAttribute(
       'href',
-      'https://github.com/s-katada/kobu/releases/download/firmware-latest/peripheral.uf2',
+      'https://github.com/s-katada/kobu/releases/download/firmware-latest/kobu-rmk-peripheral.uf2',
     );
   });
 

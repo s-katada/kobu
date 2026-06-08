@@ -79,14 +79,14 @@ export function FirmwareSection() {
 function ReleaseCard({ release }: { release: FirmwareRelease }) {
   // This is the RMK (Vial) editor — it installs the RMK firmware only
   // (central/peripheral + factory-reset). The ZMK build that the same
-  // `firmware-latest` release also carries (kobu_left/right/reset.uf2) is
+  // `firmware-latest` release also carries (kobu-zmk-left/right/reset.uf2) is
   // deliberately NOT offered here: ZMK is flashed + configured from the
   // separate ZMK editor (web/zmk-editor, ZMK Studio), and installing it from
   // this Vial editor would leave the device unreachable by this very app.
-  const central = findAsset(release, 'central.uf2');
-  const peripheral = findAsset(release, 'peripheral.uf2');
-  const centralReset = findAsset(release, 'central-reset.uf2');
-  const peripheralReset = findAsset(release, 'peripheral-reset.uf2');
+  const central = findAsset(release, 'kobu-rmk-central.uf2');
+  const peripheral = findAsset(release, 'kobu-rmk-peripheral.uf2');
+  const centralReset = findAsset(release, 'kobu-rmk-central-reset.uf2');
+  const peripheralReset = findAsset(release, 'kobu-rmk-peripheral-reset.uf2');
   const published = formatPublishedAt(release.publishedAt);
 
   return (
@@ -122,14 +122,14 @@ function ReleaseCard({ release }: { release: FirmwareRelease }) {
           target="central"
           asset={central}
           resetAsset={centralReset}
-          fallbackName="central.uf2"
+          fallbackName="kobu-rmk-central.uf2"
         />
         <AssetPanel
           label="ペリフェラル (右半分)"
           target="peripheral"
           asset={peripheral}
           resetAsset={peripheralReset}
-          fallbackName="peripheral.uf2"
+          fallbackName="kobu-rmk-peripheral.uf2"
         />
       </div>
 

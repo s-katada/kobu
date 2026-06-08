@@ -40,11 +40,11 @@ The ZMK build is exposed by the repo-root flake (`packages.zmk*`), with
 both halves + the reset image). Run from the **repo root**:
 
 ```sh
-# Both halves + reset, named for kobu -> result/kobu_{left,right,reset}.uf2
+# Both halves + reset, named for kobu -> result/kobu-zmk-{left,right,reset}.uf2
 nix build .#zmk-bundle
-cp -L result/kobu_left.uf2  ./kobu_left.uf2
-cp -L result/kobu_right.uf2 ./kobu_right.uf2
-cp -L result/kobu_reset.uf2 ./kobu_reset.uf2
+cp -L result/kobu-zmk-left.uf2  ./kobu-zmk-left.uf2
+cp -L result/kobu-zmk-right.uf2 ./kobu-zmk-right.uf2
+cp -L result/kobu-zmk-reset.uf2 ./kobu-zmk-reset.uf2
 
 # Or just the two halves:  nix build .#zmk   -> result/zmk_{left,right}.uf2
 # Or just the reset image: nix build .#zmk-reset
@@ -62,12 +62,12 @@ Double-tap the XIAO reset button; it mounts as a USB mass-storage volume. Copy
 the matching UF2 onto it:
 
 ```sh
-cp kobu_left.uf2  /Volumes/XIAO-SENSE/     # central / left half
-cp kobu_right.uf2 /Volumes/XIAO-SENSE/     # peripheral / right half
+cp kobu-zmk-left.uf2  /Volumes/XIAO-SENSE/     # central / left half
+cp kobu-zmk-right.uf2 /Volumes/XIAO-SENSE/     # peripheral / right half
 ```
 
-`kobu_reset.uf2` clears BLE bonds + stored settings (flash it, then reflash the
-normal half firmware).
+`kobu-zmk-reset.uf2` clears BLE bonds + stored settings (flash it, then reflash
+the normal half firmware).
 
 ## Fallback: manual west build
 
@@ -84,8 +84,8 @@ west build -p -d build/left  -s zmk/app -b seeeduino_xiao_ble \
   -- -DSHIELD="kobu_left rgbled_adapter" -DZMK_CONFIG="$PWD/config" -DZMK_EXTRA_MODULES="$PWD/config"
 west build -p -d build/right -s zmk/app -b seeeduino_xiao_ble \
   -- -DSHIELD="kobu_right rgbled_adapter" -DZMK_CONFIG="$PWD/config" -DZMK_EXTRA_MODULES="$PWD/config"
-cp -L build/left/zephyr/zmk.uf2  ../../kobu_left.uf2
-cp -L build/right/zephyr/zmk.uf2 ../../kobu_right.uf2
+cp -L build/left/zephyr/zmk.uf2  ../../kobu-zmk-left.uf2
+cp -L build/right/zephyr/zmk.uf2 ../../kobu-zmk-right.uf2
 ```
 
 ## Keymap editing

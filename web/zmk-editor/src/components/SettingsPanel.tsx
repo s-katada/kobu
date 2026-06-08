@@ -2,8 +2,8 @@ import { SETTINGS, type SettingDef } from '../config/settings';
 import { useBuildSettingsStore } from '../state/buildSettings';
 
 const FLASH_LABEL: Record<string, string> = {
-  'kobu_left.uf2': '左（セントラル）に書き込み',
-  'kobu_right.uf2': '右（ペリフェラル）に書き込み',
+  'kobu-zmk-left.uf2': '左（セントラル）に書き込み',
+  'kobu-zmk-right.uf2': '右（ペリフェラル）に書き込み',
 };
 
 const STEP_LABEL: Record<string, string> = {

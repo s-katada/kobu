@@ -1,7 +1,7 @@
 /**
  * Hook + types for fetching kobu firmware releases from GitHub
  * (`s-katada/kobu`, public, unauthenticated). Ported from kobu-editor;
- * the ZMK app picks the `kobu_left/right/reset.uf2` assets from the
+ * the ZMK app picks the `kobu-zmk-left/right/reset.uf2` assets from the
  * rolling `firmware-latest` pre-release.
  */
 

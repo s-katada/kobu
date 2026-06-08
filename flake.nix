@@ -242,12 +242,14 @@
         };
 
         # kobu-named UF2 bundle. `nix build .#zmk-bundle` -> result/ has
-        # kobu_left.uf2 / kobu_right.uf2 / kobu_reset.uf2.
+        # kobu-zmk-left.uf2 / kobu-zmk-right.uf2 / kobu-zmk-reset.uf2 (the
+        # `kobu-zmk-` prefix keeps them visibly distinct from the RMK build's
+        # kobu-rmk-central/peripheral images in the shared firmware-latest release).
         zmkBundle = pkgs.runCommand "kobu-zmk-uf2-bundle" { } ''
           mkdir -p $out
-          cp -L ${zmkFirmware}/zmk_left.uf2  $out/kobu_left.uf2
-          cp -L ${zmkFirmware}/zmk_right.uf2 $out/kobu_right.uf2
-          cp -L ${zmkReset}/zmk.uf2          $out/kobu_reset.uf2
+          cp -L ${zmkFirmware}/zmk_left.uf2  $out/kobu-zmk-left.uf2
+          cp -L ${zmkFirmware}/zmk_right.uf2 $out/kobu-zmk-right.uf2
+          cp -L ${zmkReset}/zmk.uf2          $out/kobu-zmk-reset.uf2
         '';
       in
       {

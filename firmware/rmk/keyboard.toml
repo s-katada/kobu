@@ -237,7 +237,7 @@ morses = [
 # a PLAIN reflash keeps the OLD value. To apply this you MUST flash once with
 # [storage] clear_layout=true (central-clearlayout.uf2 — wipes the stored
 # keymap+behavior and rewrites from this file, KEEPS BLE bonds), then flash the
-# normal central.uf2.
+# normal kobu-rmk-central.uf2.
 [behavior.morse.profiles]
 FH = { hold_on_other_press = true, hold_timeout = "350ms", gap_timeout = "200ms" }
 

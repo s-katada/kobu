@@ -108,4 +108,4 @@ Flow: browser `POST /zmk/__build` → Worker dispatches `firmware.yml`
 (`workflow_dispatch` with a base64 overrides blob + a `build_id` echoed into
 the run name) → `scripts/zmk-apply-overrides.py` patches
 `firmware/zmk/config/*` → `nix build .#zmk-bundle` → the Worker proxies the run
-artifact back → the browser unzips and flashes `kobu_left.uf2` / `kobu_right.uf2`.
+artifact back → the browser unzips and flashes `kobu-zmk-left.uf2` / `kobu-zmk-right.uf2`.

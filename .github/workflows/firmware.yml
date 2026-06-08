@@ -2,8 +2,8 @@ name: Firmware (RMK + ZMK)
 
 # Builds BOTH firmwares for kobu in clearly-separated jobs so the Actions UI
 # plainly shows which is which:
-#   * build-rmk  — the RMK (Rust/Vial) firmware           → central/peripheral(+reset)
-#   * build-zmk  — the ZMK (zmk-nix) firmware             → kobu_left/right/reset
+#   * build-rmk  — the RMK (Rust/Vial) firmware  → kobu-rmk-central/peripheral(+-reset).uf2
+#   * build-zmk  — the ZMK (zmk-nix) firmware    → kobu-zmk-left/right/reset.uf2
 #   * release    — publishes BOTH to the rolling `firmware-latest` pre-release
 # The web editors consume this: the RMK (Vial) editor installs the RMK assets,
 # the ZMK editor installs the ZMK assets, and the ZMK editor's "detailed
@@ -96,8 +96,8 @@ jobs:
           cargo build --release --bin peripheral
           cargo objcopy --release --bin central    -- -O ihex central.hex
           cargo objcopy --release --bin peripheral -- -O ihex peripheral.hex
-          cargo hex-to-uf2 --input-path central.hex    --output-path central.uf2    --family nrf52840
-          cargo hex-to-uf2 --input-path peripheral.hex --output-path peripheral.uf2 --family nrf52840
+          cargo hex-to-uf2 --input-path central.hex    --output-path kobu-rmk-central.uf2    --family nrf52840
+          cargo hex-to-uf2 --input-path peripheral.hex --output-path kobu-rmk-peripheral.uf2 --family nrf52840
           EOF
 
       # Build a second pair of UF2s with `clear_layout = true` in
@@ -117,8 +117,8 @@ jobs:
           cargo build --release --bin peripheral
           cargo objcopy --release --bin central    -- -O ihex central-reset.hex
           cargo objcopy --release --bin peripheral -- -O ihex peripheral-reset.hex
-          cargo hex-to-uf2 --input-path central-reset.hex    --output-path central-reset.uf2    --family nrf52840
-          cargo hex-to-uf2 --input-path peripheral-reset.hex --output-path peripheral-reset.uf2 --family nrf52840
+          cargo hex-to-uf2 --input-path central-reset.hex    --output-path kobu-rmk-central-reset.uf2    --family nrf52840
+          cargo hex-to-uf2 --input-path peripheral-reset.hex --output-path kobu-rmk-peripheral-reset.uf2 --family nrf52840
           sed -i 's/^clear_layout = true$/clear_layout = false/' keyboard.toml
           EOF
 
@@ -127,16 +127,16 @@ jobs:
         with:
           name: kobu-firmware-rmk
           path: |
-            firmware/rmk/central.uf2
-            firmware/rmk/peripheral.uf2
-            firmware/rmk/central-reset.uf2
-            firmware/rmk/peripheral-reset.uf2
+            firmware/rmk/kobu-rmk-central.uf2
+            firmware/rmk/kobu-rmk-peripheral.uf2
+            firmware/rmk/kobu-rmk-central-reset.uf2
+            firmware/rmk/kobu-rmk-peripheral-reset.uf2
           if-no-files-found: error
 
   # ── ZMK firmware (firmware/zmk, zmk-nix) ──────────────────────────────────
-  # Produces kobu_left.uf2 (central + Studio), kobu_right.uf2 (peripheral) and
-  # kobu_reset.uf2 (settings_reset). Runs on every event — including custom
-  # (override) dispatches from the ZMK editor.
+  # Produces kobu-zmk-left.uf2 (central + Studio), kobu-zmk-right.uf2 (peripheral)
+  # and kobu-zmk-reset.uf2 (settings_reset). Runs on every event — including
+  # custom (override) dispatches from the ZMK editor.
   build-zmk:
     name: Build ZMK firmware (zmk-nix)
     runs-on: ubuntu-latest
@@ -162,18 +162,18 @@ jobs:
         run: |
           nix build .#zmk-bundle -o result-zmk --print-build-logs
           mkdir -p zmk-out
-          cp -L result-zmk/kobu_left.uf2  zmk-out/kobu_left.uf2
-          cp -L result-zmk/kobu_right.uf2 zmk-out/kobu_right.uf2
-          cp -L result-zmk/kobu_reset.uf2 zmk-out/kobu_reset.uf2
+          cp -L result-zmk/kobu-zmk-left.uf2  zmk-out/kobu-zmk-left.uf2
+          cp -L result-zmk/kobu-zmk-right.uf2 zmk-out/kobu-zmk-right.uf2
+          cp -L result-zmk/kobu-zmk-reset.uf2 zmk-out/kobu-zmk-reset.uf2
 
       - name: Upload ZMK firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: kobu-firmware-zmk
           path: |
-            zmk-out/kobu_left.uf2
-            zmk-out/kobu_right.uf2
-            zmk-out/kobu_reset.uf2
+            zmk-out/kobu-zmk-left.uf2
+            zmk-out/kobu-zmk-right.uf2
+            zmk-out/kobu-zmk-reset.uf2
           if-no-files-found: error
 
   # ── Publish the rolling firmware-latest pre-release (RMK + ZMK) ───────────
@@ -203,9 +203,9 @@ jobs:
           SHA_SHORT=$(git rev-parse --short HEAD)
           DATE_UTC=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
           # Collect every UF2 from both downloaded artifacts. gh names each
-          # release asset by basename, so the asset names (central.uf2,
-          # kobu_left.uf2, …) the web editors fetch are preserved regardless of
-          # the artifacts' internal directory layout.
+          # release asset by basename, so the asset names (kobu-rmk-central.uf2,
+          # kobu-zmk-left.uf2, …) the web editors fetch are preserved regardless
+          # of the artifacts' internal directory layout.
           mapfile -t UF2S < <(find dist -name '*.uf2' | sort)
           test "${#UF2S[@]}" -eq 7  # 4 RMK + 3 ZMK; fail loudly if a build dropped one
           NOTES=$(cat <<NOTE
@@ -216,19 +216,19 @@ jobs:
           - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
           ## RMK ファームウェア（既定）
-          通常更新: \`central.uf2\` / \`peripheral.uf2\` を対象の XIAO BLE
-          に書き込み (RESET 2 連打 → XIAO-BOOT にドラッグ&ドロップ)。
+          通常更新: \`kobu-rmk-central.uf2\` / \`kobu-rmk-peripheral.uf2\` を対象の
+          XIAO BLE に書き込み (RESET 2 連打 → XIAO-BOOT にドラッグ&ドロップ)。
           既存のキーマップは保持されます。
 
-          工場出荷状態に戻す: \`central-reset.uf2\` / \`peripheral-reset.uf2\`
-          を一度焼くと次回起動時に storage の keymap がクリアされます。続けて
-          通常版を焼き直すとリリース時点のキーマップ + ペアリング情報維持の
-          状態になります (詳細は kobu-editor の「クリーンインストール」ボタン)。
+          工場出荷状態に戻す: \`kobu-rmk-central-reset.uf2\` /
+          \`kobu-rmk-peripheral-reset.uf2\` を一度焼くと次回起動時に storage の keymap
+          がクリアされます。続けて通常版を焼き直すとリリース時点のキーマップ +
+          ペアリング情報維持の状態になります (詳細は kobu-editor の「クリーンインストール」ボタン)。
 
           ## ZMK ファームウェア（移植版）
-          \`kobu_left.uf2\` = 左 (central, ZMK Studio 対応) / \`kobu_right.uf2\` =
-          右 (peripheral) / \`kobu_reset.uf2\` = settings_reset。RMK と同じ要領で
-          RESET 2 連打 → ドラッグ&ドロップ。
+          \`kobu-zmk-left.uf2\` = 左 (central, ZMK Studio 対応) /
+          \`kobu-zmk-right.uf2\` = 右 (peripheral) / \`kobu-zmk-reset.uf2\` =
+          settings_reset。RMK と同じ要領で RESET 2 連打 → ドラッグ&ドロップ。
           NOTE
           )
           # Delete the previous release (and its moving tag) if present so the
