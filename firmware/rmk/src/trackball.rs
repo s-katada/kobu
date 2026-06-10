@@ -469,6 +469,11 @@ pub struct ScrollProcessor<
     /// to the next event so slow rolls (per-sample |dx| < STEP) still add up
     /// to a tick instead of being lost to integer truncation.
     scroll_acc: i32,
+    /// Last time we asked the host link to re-tighten (smart re-assert, S2
+    /// fix — the scroll-side mirror of `PointerProcessor::last_reassert`).
+    /// `None` until the first re-assert. Rate-limits the re-assert to at most
+    /// once per `REASSERT_COOLDOWN` so it can never become periodic churn.
+    last_reassert: Option<Instant>,
 }
 
 impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCODER: usize>
@@ -479,6 +484,7 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
             keymap,
             next_emit_at: None,
             scroll_acc: 0,
+            last_reassert: None,
         }
     }
 }
@@ -508,6 +514,31 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                 }
                 if !matched {
                     return ProcessResult::Continue(event);
+                }
+
+                // Smart conn-param re-assert (S2 fix — scroll-side mirror of
+                // the identical block in PointerProcessor::process). Until
+                // now only the RIGHT (pointer) ball could nudge a macOS
+                // power-save-relaxed link (~30-50 ms) back to the fast HID
+                // band, so a left-ball-ONLY phase (scrolling while reading)
+                // never recovered and every tick felt laggy until the pointer
+                // moved; now any ball does. Runs on EVERY arriving H/V sample
+                // — the PMW3610 device only emits on real motion, so this
+                // stays activity-gated — and BEFORE the units==0 / throttle
+                // early-returns, so even a sub-step gentle roll triggers
+                // recovery. Same threshold + cooldown discipline as the
+                // pointer side: never the periodic churn R24 removed. (`now`
+                // is also reused by the throttle gate below.)
+                let now = Instant::now();
+                if config::host_conn_interval_us() > REASSERT_INTERVAL_THRESHOLD_US {
+                    let due = match self.last_reassert {
+                        Some(t) => now.duration_since(t) >= REASSERT_COOLDOWN,
+                        None => true,
+                    };
+                    if due {
+                        rmk::input_device::battery::KOBU_HOST_CONN_DRIFT.signal(());
+                        self.last_reassert = Some(now);
+                    }
                 }
 
                 // Direction first (preserve the corrected mapping +
@@ -550,7 +581,6 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                 // is deferred, not lost. Default throttle is 0 ms, so this
                 // gate is normally inert.
                 let throttle = config::scroll_throttle();
-                let now = Instant::now();
                 if let Some(when) = self.next_emit_at {
                     if when > now {
                         return ProcessResult::Stop;
