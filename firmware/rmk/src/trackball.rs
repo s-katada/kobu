@@ -331,7 +331,7 @@ pub async fn run_auto_mouse_layer<
 /// Multiplier base for `config::trackball_cpi()`: 1000 = 1.0×.
 const CPI_DENOM: i32 = 1000;
 
-/// Scroll sensitivity divisor: raw PMW3610 counts (at 800 CPI) per emitted
+/// Scroll sensitivity divisor: raw PMW3610 counts (at 600 CPI) per emitted
 /// wheel tick. Higher = slower / less sensitive scrolling. One HID wheel unit
 /// = one scroll detent/line on the host (macOS then layers its own scroll
 /// acceleration on top), so this is "raw counts per scrolled line".
@@ -345,8 +345,9 @@ const CPI_DENOM: i32 = 1000;
 ///   2. On top of that the user wants it ~3–4× less sensitive than it already
 ///      felt.
 /// 30 ≈ 8 × ~3.75: it both undoes the 4× poll regression and lands close to a
-/// 3.75× reduction versus the (already-too-fast) current feel. At 800 CPI =
-/// 31.5 counts/mm, 30 counts ≈ ~1 mm of ball travel per scrolled line, which
+/// 3.75× reduction versus the (already-too-fast) current feel. At the actual
+/// keyboard.toml cpi=600 = 23.6 counts/mm, 30 counts ≈ ~1.27 mm of ball
+/// travel per scrolled line, which
 /// reads as a calm, deliberate scroll. `ScrollProcessor` carries the remainder,
 /// so a slow roll (per-sample |dx| < STEP) still accumulates to a tick instead
 /// of rounding to zero. Tune 24–40 by feel; must be ≥ 1. (Could be wired to a
@@ -360,6 +361,15 @@ const SCROLL_STEP: i32 = 30;
 /// units to a small number keeps fast spins smooth (many small reports) rather
 /// than lumpy. Must be ≥ 1.
 const SCROLL_MAX_UNITS: i32 = 3;
+
+/// Idle window after which a banked sub-step scroll residue is stale and is
+/// zeroed before banking the next sample. Without this, up to SCROLL_STEP-1 =
+/// 29 counts left over from a roll minutes ago gave the next unrelated touch a
+/// head start (or fought it, when opposite). 300 ms sits safely ABOVE a slow
+/// gentle roll's sparse 60-120 ms sample gaps (the ZMK slow-roll lesson:
+/// purging slow accumulation kills slow scroll), and far below any human
+/// "came back to scroll later" gap, so genuine slow rolls keep summing.
+const SCROLL_IDLE_DECAY: Duration = Duration::from_millis(300);
 
 /// Ceiling on "owed" (accumulated-but-unsent) travel, in milli-counts.
 ///
@@ -443,9 +453,9 @@ fn clamp_i8(value: i16) -> i8 {
 
 /// Scroll processor. Matches Joystick events with H/V axes (= LEFT half,
 /// central-local, relabeled by [`AxisRelabel`]) and emits MouseReport
-/// wheel deltas. Both axes are summed and negated into the vertical
-/// wheel; `pan` is suppressed. See the LEFT-only commit history for the
-/// rationale on this combined-vertical mapping.
+/// wheel deltas. Both axes fold into the vertical wheel (H as-is, V
+/// negated — sign rationale at the `input` computation in `process`);
+/// `pan` is suppressed.
 ///
 /// Throttling / invert come from `crate::config` so a future Vial
 /// `CustomSetValue` write retunes them at runtime without a reboot.
@@ -469,6 +479,10 @@ pub struct ScrollProcessor<
     /// to the next event so slow rolls (per-sample |dx| < STEP) still add up
     /// to a tick instead of being lost to integer truncation.
     scroll_acc: i32,
+    /// `Instant` of the last arriving H/V sample (any matched sample, even
+    /// sub-step ones that emit nothing). Drives the idle decay: residue in
+    /// `scroll_acc` older than `SCROLL_IDLE_DECAY` is zeroed before banking.
+    last_event: Option<Instant>,
     /// Last time we asked the host link to re-tighten (smart re-assert, S2
     /// fix — the scroll-side mirror of `PointerProcessor::last_reassert`).
     /// `None` until the first re-assert. Rate-limits the re-assert to at most
@@ -484,6 +498,7 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
             keymap,
             next_emit_at: None,
             scroll_acc: 0,
+            last_event: None,
             last_reassert: None,
         }
     }
@@ -541,24 +556,55 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                     }
                 }
 
-                // Direction first (preserve the corrected mapping +
-                // scroll_invert_x escape hatch). The vertical (V/dy) axis is
-                // intentionally unused: scroll is driven by the LEFT ball's
-                // HORIZONTAL roll only — roll RIGHT (+dx -> +wheel) = scroll
-                // UP, roll LEFT = scroll DOWN (HID wheel: positive = up). If
-                // this module reports a rightward roll as -dx, set
+                // Direction (port of the ZMK both-axes->vertical-wheel mapping
+                // the user HW-validated 2026-06-06 in kobu_left.overlay): fold
+                // BOTH roll axes onto the vertical wheel. Horizontal keeps the
+                // confirmed kobu convention — roll RIGHT (+dx -> +wheel) =
+                // scroll UP, roll LEFT = scroll DOWN (HID wheel: positive =
+                // up); if this module reports a rightward roll as -dx, set
                 // scroll_invert_x=true (Via 0xC0 / web editor) to flip with no
-                // reflash.
-                let _ = vertical; // V axis is claimed but unused for the wheel
+                // reflash (X only by design — it does NOT cover V). Vertical
+                // is NEGATED: on ZMK this same left ball read roll-up as
+                // -REL_Y and needed Y_INVERT so up=up; AxisRelabel only
+                // renames axes (values pass through), so the same raw sign
+                // arrives here. ASSUMPTION: roll UP = -dy, hence `-vertical`
+                // gives roll UP = wheel+ = scroll UP, roll DOWN = scroll
+                // DOWN. If vertical feels reversed on HW, flip that one sign
+                // below. Known trade-off (accepted on ZMK): folding two axes
+                // into ONE vertical wheel leaves the up+left / down+right
+                // diagonal dead (the X and Y intents oppose and cancel).
                 let h = if config::scroll_invert_x() { -horizontal } else { horizontal };
+                let input = h as i32 + (-(vertical as i32));
 
-                // Magnitude reduction: the PMW3610 emits a large per-sample dx
-                // at 800 CPI, so emitting raw dx as wheel ticks scrolled far
-                // too fast. Bank raw counts and emit one wheel unit per
-                // SCROLL_STEP counts, carrying the remainder so slow rolls
-                // (|dx| < STEP per sample) still add up to a tick instead of
-                // rounding to zero.
-                self.scroll_acc += h as i32;
+                // Idle decay (dead-zone fix): zero a STALE sub-step residue
+                // before banking, so up to SCROLL_STEP-1 = 29 counts left over
+                // from a roll minutes ago can't give the next unrelated touch
+                // a head start (or fight it). See SCROLL_IDLE_DECAY for why
+                // 300 ms keeps genuine slow rolls (60-120 ms sample gaps)
+                // accumulating.
+                if let Some(prev) = self.last_event {
+                    if now.duration_since(prev) >= SCROLL_IDLE_DECAY {
+                        self.scroll_acc = 0;
+                    }
+                }
+                self.last_event = Some(now);
+
+                // Magnitude reduction: the PMW3610 emits a large per-sample
+                // delta at 600 CPI, so emitting raw counts as wheel ticks
+                // scrolled far too fast. Bank raw counts and emit one wheel
+                // unit per SCROLL_STEP counts, carrying the remainder so slow
+                // rolls (per-sample |input| < STEP) still add up to a tick
+                // instead of rounding to zero.
+                //
+                // Direction-flip reset (dead-zone fix): an opposite-sign
+                // residue used to make a reversal pay up to 2*SCROLL_STEP-1 =
+                // 59 counts of dead travel before its first tick. Zero the
+                // bank on a sign flip so the first reversed tick costs exactly
+                // SCROLL_STEP counts.
+                if input != 0 && self.scroll_acc != 0 && input.signum() != self.scroll_acc.signum() {
+                    self.scroll_acc = 0;
+                }
+                self.scroll_acc += input;
                 // Bound the bank so a busy-channel catch-up (units kept on a
                 // dropped send, see below) plus one large 500 Hz sample can't
                 // become a giant wheel jump. Sized to SCROLL_MAX_UNITS ticks'
