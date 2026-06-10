@@ -181,6 +181,24 @@ fn main() {
     patch_rmk_ble_server_mouse_i16();
     patch_rmk_usb_mouse_i16();
 
+    // Step 2 (RMK fix series) — ZMK-parity PPCP (0x2A04). macOS relaxes the
+    // bonded host link to ~30-50ms when idle; ZMK keyboards stay in-band
+    // because they EXPOSE the Peripheral Preferred Connection Parameters
+    // characteristic in the GAP service (7.5ms/15ms/latency 0/timeout 2s) and
+    // macOS reads it at (re)connect. trouble-host 0.5.1 has PPCP stubbed out
+    // (src/gap.rs TODO), so this patches the trouble-host REGISTRY source —
+    // the first build.rs patch outside the rmk crate. It also bumps
+    // GAP_SERVICE_ATTRIBUTE_COUNT 6 -> 8, which auto-grows every bare
+    // #[gatt_server] attribute table (rmk has three, all bare) so the
+    // heapless push().unwrap() in trouble's attribute.rs can never overflow.
+    // Anchors only on trouble-host text → order-independent of the rmk
+    // patches above. REQUIRES `cargo clean --release -p trouble-host` once
+    // (registry-patch gotcha, same as the TROUBLE_HOST_* envs in
+    // .cargo/config.toml). Bonded Macs cache the GATT DB and trouble has no
+    // Service Changed characteristic → unpair + re-pair to actually see PPCP
+    // (precedent: the 2026-05-15 BAS addition).
+    patch_trouble_gap_ppcp();
+
     generate_vial_config();
 
     let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
@@ -4253,6 +4271,103 @@ fn patch_rmk_host_conn_request_once_r24() {
                 "kobu: r24 anchor `{from}` missing in rmk-{RMK_VERSION} {} \
                  (must run AFTER patch_rmk_host_conn_range_zmk / narrow_max_r19 / latency_30_r21); \
                  upstream/patches changed — update firmware/build.rs",
+                path.display()
+            );
+        }
+        contents = contents.replace(from, to);
+    }
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Locate a file inside the trouble-host registry checkout — same walk as
+/// `find_rmk_file`, different crate dir.
+fn find_trouble_host_file(version: &str, rel_path: &str) -> Option<PathBuf> {
+    let home = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .ok()?;
+    let src_root = PathBuf::from(home).join(".cargo/registry/src");
+    let entries = fs::read_dir(&src_root).ok()?;
+    let crate_dir = format!("trouble-host-{version}");
+    let rel = Path::new(&crate_dir).join(rel_path);
+
+    for entry in entries.flatten() {
+        let candidate = entry.path().join(&rel);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Step 2 (RMK fix series) — expose the Peripheral Preferred Connection
+/// Parameters characteristic (PPCP, 0x2A04, read-only) in the GAP service that
+/// trouble-host builds for the BLE-peripheral role. rmk's Mac-facing server
+/// (ble/mod.rs `Server::new_with_config(GapConfig::Peripheral(..))`) gets it —
+/// the link that matters; the right half's split-link GAP service
+/// (`BleSplitPeripheralServer::new_default`) gets it too, harmlessly (rmk's
+/// split central sets conn params explicitly and never reads PPCP).
+/// Value = [0x06,0x00, 0x0C,0x00, 0x00,0x00, 0xC8,0x00]: min 6 (7.5ms),
+/// max 12 (15ms), latency 0, supervision timeout 200 (2s) — byte-for-byte what
+/// ZMK/Zephyr exposes; macOS reads PPCP during service discovery and holds the
+/// link in-band instead of relaxing it to ~30-50ms when idle.
+/// GAP_SERVICE_ATTRIBUTE_COUNT goes 6 -> 8 in the same patch (+1 declaration
+/// +1 value; read-only → no CCCD, so _CCCD_TABLE_SIZE and the persisted CCCD
+/// table are untouched). Every rmk `#[gatt_server]` is bare, so the macro
+/// auto-sizes its table from that const as a path expression evaluated when
+/// rmk compiles — all tables grow in lock-step and the runtime
+/// `Vec::push().unwrap()` in trouble's attribute.rs can never overflow.
+/// Handle layout after GAP is unchanged: ServiceBuilder 16-aligns the next
+/// handle, so GAP using handles 1-7 instead of 1-5 still puts the GATT
+/// service at 0x10 and every later service exactly where bonded Macs cached it.
+fn patch_trouble_gap_ppcp() {
+    const MARKER: &str = "// kobu: PPCP (0x2A04) exposed";
+    const TROUBLE_VERSION: &str = "0.5.1";
+
+    let Some(path) = find_trouble_host_file(TROUBLE_VERSION, "src/gap.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find trouble-host-{TROUBLE_VERSION} gap.rs; \
+             PPCP patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let edits = [
+        // (1) +2 attributes (PPCP declaration + value) for every auto-sized
+        //     #[gatt_server] table — keeps the heapless attribute Vec capacity
+        //     ahead of the push().unwrap() in attribute.rs (overflow = boot
+        //     panic, prevented statically here).
+        (
+            "pub const GAP_SERVICE_ATTRIBUTE_COUNT: usize = 6;",
+            "pub const GAP_SERVICE_ATTRIBUTE_COUNT: usize = 8; // kobu: +2 — PPCP declaration + value (read-only, no CCCD)",
+        ),
+        // (2) append PPCP after DEVICE_NAME/APPEARANCE in the peripheral-role
+        //     GAP build (the conventional name/appearance/PPCP order). The
+        //     `peripheral_name` line disambiguates vs CentralConfig::build,
+        //     which is left untouched (PPCP is peripheral-role-only; central
+        //     tables just gain 2 spare slots from the const bump).
+        (
+            "        gap_builder.add_characteristic_ro(characteristic::DEVICE_NAME, peripheral_name);\n        gap_builder.add_characteristic_ro(characteristic::APPEARANCE, self.appearance);\n        gap_builder.build();",
+            "        gap_builder.add_characteristic_ro(characteristic::DEVICE_NAME, peripheral_name);\n        gap_builder.add_characteristic_ro(characteristic::APPEARANCE, self.appearance);\n        // kobu: ZMK-parity PPCP — min 6 (7.5ms), max 12 (15ms), latency 0,\n        // supervision timeout 200 (2s); little-endian u16 each. macOS reads\n        // this at (re)connect and holds the link in-band instead of relaxing\n        // it to ~30-50ms when idle.\n        static KOBU_PPCP_VALUE: [u8; 8] = [0x06, 0x00, 0x0C, 0x00, 0x00, 0x00, 0xC8, 0x00];\n        gap_builder.add_characteristic_ro(characteristic::PERIPHERAL_PREFERRED_CONNECTION_PARAMETERS, &KOBU_PPCP_VALUE);\n        gap_builder.build();",
+        ),
+    ];
+    for (from, to) in edits {
+        if !contents.contains(from) {
+            panic!(
+                "kobu: PPCP anchor `{from}` missing in trouble-host-{TROUBLE_VERSION} {}; \
+                 upstream changed — update firmware/build.rs::patch_trouble_gap_ppcp",
                 path.display()
             );
         }
