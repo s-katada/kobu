@@ -142,6 +142,20 @@ fn main() {
     // latency 30→0, max 11.25→15ms ([7.5,15] range macOS accepts & holds), and
     // neuter both re-assert gates (>13ms → >4s = never fires) so no churn.
     patch_rmk_host_conn_request_once_r24();
+    // Round 25 — pointer-triggered host conn refresh v2 (port of the previously
+    // REGISTRY-ONLY hand patch the flashed UF2s were built from). R24's
+    // request-once killed the churn but removed every recovery path: once macOS
+    // power-relaxes the bonded link (~15ms → 30-50ms after an idle spell),
+    // nothing pulls it back. Keep request-once for the healthy/idle case, but
+    // turn the old re-assert loop into a pure consumer of KOBU_HOST_CONN_DRIFT:
+    // no periodic backstop (the 2s select backstop is dropped), gate restored
+    // to the >12ms fast-HID-band edge; the signal is fired by kobu's
+    // PointerProcessor (src/trackball.rs) only during ACTIVE ball motion,
+    // cooldown-limited. Anchors on the R12 select-backstop loop as rewritten by
+    // R18/R19/R24, so it MUST run AFTER patch_rmk_host_conn_request_once_r24
+    // (and no later ble/mod.rs patch may come between them, keeping the
+    // appended marker order — and therefore the file bytes — exact).
+    patch_rmk_host_conn_refresh_r25();
 
     // Round 26 — pointer のろのろ TRUE ROOT CAUSE = the i8 (±127) mouse report.
     // RMK's mouse HID report is i8 x/y and kobu emits ONE report per BLE
@@ -4245,6 +4259,92 @@ fn patch_rmk_host_conn_request_once_r24() {
         contents = contents.replace(from, to);
     }
 
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Round 25 — pointer-triggered host conn refresh v2 (port of the previously
+/// REGISTRY-ONLY hand patch; the flashed UF2s were built from it, so a fresh
+/// registry extraction without this fn would silently lose the behaviour and
+/// leave the re-assert permanently inert). R24 made the host conn-param
+/// request fire ONCE and neutered the re-assert gates (>13ms → >4s = never
+/// fires), which killed the relax/recover churn but also removed every
+/// recovery path: once macOS power-relaxes the bonded link (~15ms → 30-50ms
+/// after an idle spell) nothing ever pulls it back. v2 keeps request-once for
+/// the healthy/idle case but turns the old loop into a PURE CONSUMER of
+/// KOBU_HOST_CONN_DRIFT: drop the 2s periodic backstop (select(Timer, wait) →
+/// plain .wait().await) and restore the loop's live gate to the fast-HID-band
+/// edge (>4s → >12ms). The signal is fired by kobu's PointerProcessor
+/// (src/trackball.rs) only during ACTIVE ball motion while the live interval
+/// is relaxed past 18ms, rate-limited to once per 2s cooldown — so the
+/// re-assert is activity-gated + bounded, NOT the periodic churn R24 removed.
+/// The ConnectionParamsUpdated arm's own drift signal deliberately stays at
+/// the inert R24 >4s gate: only real pointer activity may re-open negotiation.
+/// Anchors on the R12 select-backstop loop text as rewritten by R18/R19/R24 →
+/// MUST run AFTER patch_rmk_host_conn_request_once_r24 in main(). The marker
+/// is appended after an EXTRA blank line (two '\n' pushes) to stay
+/// byte-identical with the hand-patched registry the current firmware shipped
+/// from.
+fn patch_rmk_host_conn_refresh_r25() {
+    const MARKER: &str = "// kobu: r25 pointer-triggered host conn refresh v2 applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/ble/mod.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} ble/mod.rs; \
+             r25 pointer-triggered refresh patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    // Replace the R12 event-driven select (2s backstop) + the R24-neutered >4s
+    // gate with the round-25 pure-consumer wait + the 12ms fast-band gate. The
+    // `interval_us` spelling can never match the ConnectionParamsUpdated arm's
+    // `conn_interval.as_micros()` gate, which stays at > 4_000_000 (inert) on
+    // purpose — only PointerProcessor activity re-opens negotiation.
+    let from = r#"        // kobu (round 12): event-driven — wake within ms when the
+        // ConnectionParamsUpdated arm signals a slow drift, with a 2s backstop
+        // for a slow interval that landed before this loop existed.
+        let _ = select(
+            Timer::after_secs(2),
+            crate::input_device::battery::KOBU_HOST_CONN_DRIFT.wait(),
+        )
+        .await;
+        let interval_us =
+            crate::input_device::battery::KOBU_HOST_CONN_INTERVAL_US.load(Ordering::Relaxed);
+        if interval_us > 4_000_000 {"#;
+    let to = r#"        // kobu (round 25): no periodic backstop. PointerProcessor signals this
+        // only while the ball is actively moving and the host interval has left
+        // the fast HID band (>12ms), so we recover from real のろのろ without re-opening BLE
+        // negotiation in the healthy/idle case.
+        crate::input_device::battery::KOBU_HOST_CONN_DRIFT.wait().await;
+        let interval_us =
+            crate::input_device::battery::KOBU_HOST_CONN_INTERVAL_US.load(Ordering::Relaxed);
+        if interval_us > 12_000 {"#;
+    if !contents.contains(from) {
+        panic!(
+            "kobu: r25 expected the R12/R24 select-backstop re-assert loop in rmk-{RMK_VERSION} {} \
+             (must run AFTER patch_rmk_host_conn_request_once_r24); upstream/patches changed — \
+             update firmware/build.rs::patch_rmk_host_conn_refresh_r25",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    // Byte-identity with the hand-patched registry: its marker sits after TWO
+    // newlines (one extra blank line vs the usual single-'\n' marker style).
+    contents.push('\n');
     contents.push('\n');
     contents.push_str(MARKER);
     contents.push('\n');
