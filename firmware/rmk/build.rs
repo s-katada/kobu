@@ -36,6 +36,7 @@ fn main() {
     patch_rmk_split_conn_offbeat_interval();
     patch_rmk_macro_sdc_buffers();
     patch_rmk_flow_tap_exempt_language();
+    patch_rmk_flow_tap_exempt_language_held();
     patch_rmk_split_state_resync_fast();
     patch_rmk_force_ble_conn_type();
     patch_rmk_force_hid_cccd_on_connect();
@@ -4791,6 +4792,67 @@ fn patch_rmk_flow_tap_exempt_language() {
         panic!(
             "kobu: flow-tap anchor missing in rmk-{RMK_VERSION} {}; upstream changed \u{2014} \
              update firmware/build.rs::patch_rmk_flow_tap_exempt_language",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+/// Part 2 of the language-thumb flow-tap exemption. When the CURRENT key
+/// triggers flow tap, rmk resolves EVERY held undecided morse key as a tap
+/// ("tapping all held keys") — so a deliberately-held 英数/かな thumb (Shift)
+/// still got force-tapped to Language1/2 the moment the next key (e.g. the
+/// `:`/`;` key) flow-tapped, defeating part 1. Exempt the language thumbs in
+/// the held-key branch too: they fall through to the HoldOnOtherPress arm,
+/// the chord resolves Shift instantly, and the current key (no longer
+/// flow-tap-decided for the buffer path) resolves normally on release with
+/// Shift already down — the colon fork then correctly yields ';'.
+fn patch_rmk_flow_tap_exempt_language_held() {
+    const MARKER: &str = "// kobu: flow-tap language-thumb HELD exemption applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard.rs; \
+             flow-tap held-language exemption was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"                        if decision_for_current_key == KeyBehaviorDecision::FlowTap
+                            && matches!(held_key.state, KeyState::Pressed(_))
+                        {
+                            debug!("Flow tap triggered, resolve buffered morse key as tapping");"#;
+    let to = r#"                        if decision_for_current_key == KeyBehaviorDecision::FlowTap
+                            && matches!(held_key.state, KeyState::Pressed(_))
+                            // kobu: a held LANGUAGE thumb (tap = IME switch, hold =
+                            // Shift) is a deliberate modifier chord, not a typing-
+                            // streak roll — skip the force-tap and fall through to
+                            // the HoldOnOtherPress arm below, which resolves the
+                            // chord as Shift instantly.
+                            && !matches!(
+                                held_key.action,
+                                KeyAction::TapHold(Action::Key(KeyCode::Language1 | KeyCode::Language2), _, _)
+                            )
+                        {
+                            debug!("Flow tap triggered, resolve buffered morse key as tapping");"#;
+    if !contents.contains(from) {
+        panic!(
+            "kobu: flow-tap held-keys anchor missing in rmk-{RMK_VERSION} {}; upstream changed \u{2014} \
+             update firmware/build.rs::patch_rmk_flow_tap_exempt_language_held",
             path.display()
         );
     }
