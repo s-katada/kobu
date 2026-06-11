@@ -37,6 +37,7 @@ fn main() {
     patch_rmk_macro_sdc_buffers();
     patch_rmk_flow_tap_exempt_language();
     patch_rmk_flow_tap_exempt_language_held();
+    patch_rmk_forks_at_action_choke_point();
     patch_rmk_split_state_resync_fast();
     patch_rmk_force_ble_conn_type();
     patch_rmk_force_hid_cccd_on_connect();
@@ -4853,6 +4854,79 @@ fn patch_rmk_flow_tap_exempt_language_held() {
         panic!(
             "kobu: flow-tap held-keys anchor missing in rmk-{RMK_VERSION} {}; upstream changed \u{2014} \
              update firmware/build.rs::patch_rmk_flow_tap_exempt_language_held",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+/// Fork choke-point routing. rmk evaluates forks ONLY in
+/// process_key_action_inner via try_start_forks on raw KeyActions — and a
+/// TapHold action never equals a Single(...) fork trigger (KeyAction's
+/// PartialEq: `_ => false`), while every morse-resolved TAP (FlowTap /
+/// UnilateralTap / Release / timeout arms) and every combo output is emitted
+/// at the Action level through process_key_action_normal, bypassing forks
+/// entirely. Net effect on kobu: the :/; fork NEVER applied to the MT
+/// semicolon key (HW-проven: slow Shift-then-tap "works" only because the raw
+/// Semicolon+held-Shift report happens to render ':' inverted expectations…
+/// fast chords always emit ':'), and the U+I → Backslash combo never morphs
+/// to '|'. Fix: consult the fork table once, at the single choke point all
+/// emissions share — the top of process_key_action_normal. Idempotent with
+/// the inner path: an active fork_states[i] blocks re-triggering, and a
+/// replaced action no longer equals its trigger; release events look up the
+/// active replacement then clear it (same start→finish discipline as inner).
+fn patch_rmk_forks_at_action_choke_point() {
+    const MARKER: &str = "// kobu: fork choke-point routing applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard.rs; \
+             fork choke-point patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"    async fn process_key_action_normal(&mut self, action: Action, event: KeyboardEvent) {
+        match action {"#;
+    let to = r#"    async fn process_key_action_normal(&mut self, action: Action, event: KeyboardEvent) {
+        // kobu: route every plain Key emission through the fork table. Morse
+        // tap resolutions and combo outputs land here WITHOUT passing
+        // try_start_forks (inner-only, and TapHold never equals a Single
+        // trigger), so keymap forks (:/; invert, \/| morph) silently never
+        // applied to them. Active-fork guards make this idempotent for paths
+        // that already forked in process_key_action_inner.
+        let action = if let Action::Key(_) = action {
+            let wrapped = KeyAction::Single(action);
+            let forked = self.try_start_forks(&wrapped, event);
+            if !event.pressed {
+                self.try_finish_forks(&wrapped, event);
+            }
+            match forked {
+                KeyAction::Single(a) => a,
+                _ => action,
+            }
+        } else {
+            action
+        };
+        match action {"#;
+    if !contents.contains(from) {
+        panic!(
+            "kobu: process_key_action_normal anchor missing in rmk-{RMK_VERSION} {}; upstream changed \u{2014} \
+             update firmware/build.rs::patch_rmk_forks_at_action_choke_point",
             path.display()
         );
     }
