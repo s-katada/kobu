@@ -31,6 +31,7 @@ fn main() {
     patch_rmk_conn_params_fast_settling();
     patch_rmk_host_conn_low_latency();
     patch_rmk_split_conn_low_latency();
+    patch_rmk_split_conn_event_length();
     patch_rmk_split_state_resync_fast();
     patch_rmk_force_ble_conn_type();
     patch_rmk_force_hid_cccd_on_connect();
@@ -4460,6 +4461,72 @@ fn patch_rmk_host_conn_refresh_r25() {
     // Byte-identity with the hand-patched registry: its marker sits after TWO
     // newlines (one extra blank line vs the usual single-'\n' marker style).
     contents.push('\n');
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+/// step5c — give the SPLIT link real connection-event bandwidth (CE length
+/// extension). trouble's `ConnectParams::default()` leaves min/max_event_length
+/// at 0, and `defaul_central_conn_param()` inherits that via `..Default::
+/// default()`. On nrf-sdc a zero CE length reserves only a minimal slot, so the
+/// peripheral drains ~1 PDU per 7.5ms connection event (~133/s) — a bare 6%
+/// margin over the right ball's 125 pointer samples/s. The central's single
+/// radio also timeshares the Mac host link (15ms CEs); every scheduling
+/// collision tips split drain below production, the pipeline queues fill (the
+/// PMW3610 keeps accumulating losslessly in-silicon), and the cursor trails the
+/// hand by the queued backlog — the sustained-motion 追従遅延 that recovers
+/// after a short idle, on BLE and USB alike (the host transport is downstream
+/// and was measured healthy/purple). ZMK on the same hardware is smooth because
+/// Zephyr's LL enables connection-event-length extension by default. min stays
+/// 0 (no hard reservation — the Mac link keeps its slots); max 4ms lets a
+/// backlog flush within ONE event.
+fn patch_rmk_split_conn_event_length() {
+    const MARKER: &str = "// kobu: split CE length extension applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/split/ble/central.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} split/ble/central.rs; \
+             split CE length patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"        max_latency: 0, // kobu: was 30 (~225ms); 0 = listen every interval, kills split-link pointer lag
+        supervision_timeout: Duration::from_secs(5),
+        ..Default::default()"#;
+    let to = r#"        max_latency: 0, // kobu: was 30 (~225ms); 0 = listen every interval, kills split-link pointer lag
+        // kobu (step5c): non-zero max CE length so the SDC can EXTEND split
+        // connection events. At the default 0 the controller drains ~1 PDU per
+        // 7.5ms CE (~133/s) — barely above the right ball's 125 samples/s, so
+        // any radio collision with the Mac link tips drain below production and
+        // the pipeline queues fill: sustained-motion 追従遅延 that recovers
+        // after a short idle. min stays 0 = no hard reservation (the Mac link
+        // keeps its slots); max 4ms lets a backlog flush within ONE event.
+        min_event_length: Duration::from_secs(0),
+        max_event_length: Duration::from_micros(4_000),
+        supervision_timeout: Duration::from_secs(5),
+        ..Default::default()"#;
+    if !contents.contains(from) {
+        panic!(
+            "kobu: split CE length anchor missing in rmk-{RMK_VERSION} {} \
+             (must run AFTER patch_rmk_split_conn_low_latency); upstream/patches changed \u{2014} \
+             update firmware/build.rs::patch_rmk_split_conn_event_length",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
     contents.push('\n');
     contents.push_str(MARKER);
     contents.push('\n');
