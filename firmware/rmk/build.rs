@@ -35,6 +35,7 @@ fn main() {
     patch_rmk_split_conn_event_min_reservation();
     patch_rmk_split_conn_offbeat_interval();
     patch_rmk_macro_sdc_buffers();
+    patch_rmk_flow_tap_exempt_language();
     patch_rmk_split_state_resync_fast();
     patch_rmk_force_ble_conn_type();
     patch_rmk_force_hid_cccd_on_connect();
@@ -4725,6 +4726,71 @@ fn patch_rmk_split_conn_offbeat_interval() {
             "kobu: split off-harmonic anchor missing in rmk-{RMK_VERSION} {} \
              (must run AFTER patch_rmk_split_conn_low_latency); upstream/patches changed \u{2014} \
              update firmware/build.rs::patch_rmk_split_conn_offbeat_interval",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+/// Flow-tap exemption for the LANGUAGE thumbs (tap = Language1/Language2 =
+/// IME switch, hold = Shift). Flow tap (morse key pressed within
+/// prior_idle_time of the previous key = instant TAP) is right for Space/Enter
+/// and the other thumbs — it is what keeps a rolled "git s" from becoming a
+/// layer hold. But the language thumbs are the keyboard's SHIFT: you chord
+/// them mid-typing (Shift+: to get ';' through the colon fork), and inside a
+/// typing streak flow tap force-tapped them — no Shift, plus an unwanted IME
+/// switch — so Shift only "worked" after pausing ≥prior_idle_time ("長めに
+/// holdしないと反応しない"). Exempt exactly those two tap actions; everything
+/// else keeps flow tap.
+fn patch_rmk_flow_tap_exempt_language() {
+    const MARKER: &str = "// kobu: flow-tap language-thumb exemption applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard.rs; \
+             flow-tap language exemption was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"        // When pressing a morse key, check flow tap first.
+        if event.pressed
+            && self.keymap.borrow().behavior.morse.enable_flow_tap
+            && key_action.is_morse()
+            && self.last_press_time.elapsed() < self.keymap.borrow().behavior.morse.prior_idle_time
+        {"#;
+    let to = r#"        // When pressing a morse key, check flow tap first.
+        // kobu: the language thumbs (tap = Language1/Language2, hold = Shift)
+        // are exempt — their hold is a MODIFIER chorded mid-typing (Shift+:
+        // for ';'), and flow tap force-tapped them inside a typing streak (no
+        // Shift + an unwanted IME switch). Everything else keeps flow tap.
+        if event.pressed
+            && self.keymap.borrow().behavior.morse.enable_flow_tap
+            && key_action.is_morse()
+            && !matches!(
+                key_action,
+                KeyAction::TapHold(Action::Key(KeyCode::Language1 | KeyCode::Language2), _, _)
+            )
+            && self.last_press_time.elapsed() < self.keymap.borrow().behavior.morse.prior_idle_time
+        {"#;
+    if !contents.contains(from) {
+        panic!(
+            "kobu: flow-tap anchor missing in rmk-{RMK_VERSION} {}; upstream changed \u{2014} \
+             update firmware/build.rs::patch_rmk_flow_tap_exempt_language",
             path.display()
         );
     }
