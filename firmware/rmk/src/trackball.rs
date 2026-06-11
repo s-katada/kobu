@@ -831,18 +831,21 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                         wheel: 0,
                         pan: 0,
                     };
-                    // Emit only when the shared HID channel is EMPTY, keeping
-                    // exactly ONE pointer report in flight. Was `len() <= 1`
-                    // (up to 2 queued = ~2 host intervals ≈ 30 ms of buffer
-                    // latency); the central→macOS link is confirmed healthy
-                    // (host steady ~15 ms, samples arriving fine), so the residual
-                    // のろのろ is this emit-queue lag. `== 0` keeps 1-in-flight
-                    // (~1 host interval ≈ 15 ms), matching ZMK's freshest-report-
-                    // per-connection-event behaviour, and the unsent motion still
-                    // coalesces losslessly into pend_*. At ~125 samples/s the
-                    // writer never starves (an arrival refills within ~8 ms), so
-                    // throughput stays at the host rate while latency halves.
-                    if KEYBOARD_REPORT_CHANNEL.len() == 0
+                    // Emit gate (step9): `<= 1`, the SAME admission rule as
+                    // ScrollProcessor. This used to be `== 0` ("freshest report
+                    // only"), which is correct when the pointer is the only
+                    // producer — but the channel is SHARED with scroll, and
+                    // scroll's gate admits at `len() <= 1`. During simultaneous
+                    // scroll+pointer use (the user's HW-isolated trigger for the
+                    // 追従遅延: 両ボール同時/交互操作で発生、置くと治る) scroll
+                    // keeps the channel at len >= 1, so a `== 0` pointer gate
+                    // STRUCTURALLY starves: pointer reports defer into pend_*
+                    // and reach the host as sparse, big, late jumps while scroll
+                    // sails through — the cursor trails the hand. Peripheral
+                    // exonerated on HW (queue-depth LED solid green during lag).
+                    // Equal gates restore fair interleaving; pend_* still
+                    // coalesces losslessly when the channel is genuinely busy.
+                    if KEYBOARD_REPORT_CHANNEL.len() <= 1
                         && KEYBOARD_REPORT_CHANNEL
                             .try_send(Report::MouseReportWide(report))
                             .is_ok()
