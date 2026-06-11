@@ -81,17 +81,19 @@ jobs:
         run: |
           nix develop .#firmware --command bash -eux <<'EOF'
           cd firmware/rmk
-          # kobu's build.rs patches the `rmk` crate's REGISTRY SOURCE in place
-          # (adds the KOBU_* atomics/consts, makes Keymap::{activate,deactivate}_layer
-          # pub, BLE tweaks, …). But cargo compiles the rmk dependency BEFORE running
-          # our build.rs and treats the registry source as immutable, so on a
-          # pristine CI registry the first build compiles rmk UNPATCHED and kobu
-          # then fails to resolve the injected symbols. The fix mirrors the local
-          # `cargo clean --release -p rmk` workflow: one throwaway build to let
-          # build.rs apply the (idempotent) patches, then force rmk to recompile
-          # from the now-patched source, then build for real.
+          # kobu's build.rs patches REGISTRY SOURCES in place: the `rmk` crate
+          # (KOBU_* atomics, conn-param/split tweaks, …), `trouble-host` (PPCP
+          # 0x2A04 in the GAP service) and `rmk-macro` (SDC L2CAP queue depth +
+          # Mem headroom). But cargo compiles dependencies BEFORE running our
+          # build.rs and treats registry sources as immutable, so on a pristine
+          # CI registry the first build compiles them UNPATCHED. The fix mirrors
+          # the local workflow: one throwaway build to let build.rs apply the
+          # (idempotent) patches, then force ALL THREE patched crates to
+          # recompile from the now-patched sources, then build for real.
+          # (Cleaning only rmk would SILENTLY ship UF2s without PPCP and with
+          # the 3-deep SDC queues — no build error, just missing behavior.)
           cargo build --release --bin central || true
-          cargo clean --release -p rmk
+          cargo clean --release -p rmk -p trouble-host -p rmk-macro
           cargo build --release --bin central
           cargo build --release --bin peripheral
           cargo objcopy --release --bin central    -- -O ihex central.hex
