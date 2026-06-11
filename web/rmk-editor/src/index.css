@@ -9,3 +9,84 @@ body,
 #root {
   height: 100%;
 }
+
+/* ─── 実機ビュー (PhysicalKeymapView) のマテリアル ──────────────────────
+   実機写真 (blog step-3-1) の質感を再現するための層:
+   ケースの落ち影 / キーキャップの立体 / トラックボールの球面。
+   ダークモードは Tailwind と同じ prefers-color-scheme で切り替える。 */
+
+/* ケース 1 半身分の落ち影。SVG の <g> に掛けるので長さはユーザー座標 (mm)。 */
+.kobu-case {
+  filter: drop-shadow(0 0.5px 0.25px rgba(63, 63, 70, 0.3))
+    drop-shadow(0 2.2px 2.4px rgba(63, 63, 70, 0.22));
+}
+@media (prefers-color-scheme: dark) {
+  .kobu-case {
+    filter: drop-shadow(0 0.5px 0.25px rgba(0, 0, 0, 0.6))
+      drop-shadow(0 2.2px 2.6px rgba(0, 0, 0, 0.55));
+  }
+}
+
+/* プレート同士の継ぎ目（親指ユニットがメインプレートに重なる縁の影線）。 */
+.kobu-seam {
+  stroke: rgba(82, 82, 91, 0.2);
+}
+.kobu-seam-fill {
+  fill: rgba(82, 82, 91, 0.2);
+}
+@media (prefers-color-scheme: dark) {
+  .kobu-seam {
+    stroke: rgba(0, 0, 0, 0.5);
+  }
+  .kobu-seam-fill {
+    fill: rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* キーキャップ本体（側面）。上面より僅かに濃い側壁 + デスクへの接地影。 */
+.kobu-cap {
+  background: linear-gradient(180deg, #f7f7f8 0%, #ebebee 55%, #d8d8dc 100%);
+  box-shadow:
+    0 1px 1.5px rgba(63, 63, 70, 0.28),
+    0 4px 7px -2px rgba(63, 63, 70, 0.26);
+}
+@media (prefers-color-scheme: dark) {
+  .kobu-cap {
+    background: linear-gradient(180deg, #5d5d68 0%, #47474f 55%, #34343b 100%);
+    box-shadow:
+      0 1px 1.5px rgba(0, 0, 0, 0.55),
+      0 4px 8px -2px rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* トラックボールの球面。左上光源のラジアルグラデ + 内側の陰影。 */
+.kobu-ball {
+  background: radial-gradient(
+    circle at 31% 27%,
+    #ffffff 0%,
+    #ffffff 32%,
+    #f1f1f3 52%,
+    #dcdce0 72%,
+    #b8b8c0 92%,
+    #9d9da6 100%
+  );
+  box-shadow:
+    inset -4px -6px 9px rgba(50, 50, 58, 0.18),
+    inset 3px 4px 6px rgba(255, 255, 255, 0.9),
+    0 2px 4px rgba(63, 63, 70, 0.3);
+}
+@media (prefers-color-scheme: dark) {
+  .kobu-ball {
+    background: radial-gradient(
+      circle at 31% 27%,
+      #d4d4d8 0%,
+      #b0b0b8 30%,
+      #82828c 60%,
+      #4f4f57 100%
+    );
+    box-shadow:
+      inset -4px -6px 9px rgba(0, 0, 0, 0.45),
+      inset 3px 4px 6px rgba(255, 255, 255, 0.35),
+      0 2px 4px rgba(0, 0, 0, 0.5);
+  }
+}

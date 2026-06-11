@@ -1,13 +1,16 @@
 /**
  * Top-level editor view. Composed of:
- *   * `EditorToolbar`     — layer tabs, undo/redo, save
- *   * `KeymapView`        — split HTML keycap grid
- *   * `KeycodeDock`       — persistent inline picker docked below
- *   * `BluetoothPanel`    — Layer 3 BLE side panel (only on layer 3)
- *   * `MacroEditor`       — macro buffer editor
- *   * `ComboEditor`       — combo entries editor
- *   * `MorseEditor`       — tap-dance / morse editor
- *   * `KobuSettingsPanel` — kobu-specific runtime knobs
+ *   * `EditorToolbar`       — layer tabs, undo/redo, save
+ *   * `PhysicalKeymapView`  — clickable real-hardware illustration (default)
+ *   * `KeymapView`          — split HTML keycap grid (toggle fallback)
+ *   * `KeycodeDock`         — persistent inline picker docked below
+ *   * `TrackballDock`       — per-ball settings, shown when a trackball
+ *                             on the illustration is selected
+ *   * `BluetoothPanel`      — Layer 3 BLE side panel (only on layer 3)
+ *   * `MacroEditor`         — macro buffer editor
+ *   * `ComboEditor`         — combo entries editor
+ *   * `MorseEditor`         — tap-dance / morse editor
+ *   * `KobuSettingsPanel`   — kobu-specific runtime knobs
  *
  * Subscribes to the connection store so we know when to attach
  * (transitions to `ready`) and detach (transition out of `ready`).
@@ -19,9 +22,11 @@
  *   - ←↑→↓         move the selected cell within the active layer
  *   - Backspace    clear the selected cell to KC_NO
  *   - T            set the selected cell to Transparent
+ *   - Escape       close the trackball settings dock
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { type BallSide, isKobuMatrix } from '../layout/kobuPhysical';
 import { encodeNo, encodeTransparent } from '../protocol/keycodes';
 import { useComboStore } from '../state/combos';
 import { useConnectionStore } from '../state/connection';
@@ -39,7 +44,29 @@ import { KobuBatteryPanel } from './KobuBatteryPanel';
 import { KobuSettingsPanel } from './KobuSettingsPanel';
 import { MacroEditor } from './MacroEditor';
 import { MorseEditor } from './MorseEditor';
+import { PhysicalKeymapView } from './PhysicalKeymapView';
+import { TrackballDock } from './TrackballDock';
 import { UnlockPanel } from './UnlockPanel';
+
+type KeymapViewMode = 'physical' | 'grid';
+
+const VIEW_MODE_STORAGE_KEY = 'kobu-editor.keymap-view';
+
+function loadViewMode(): KeymapViewMode {
+  try {
+    return localStorage.getItem(VIEW_MODE_STORAGE_KEY) === 'grid' ? 'grid' : 'physical';
+  } catch {
+    return 'physical';
+  }
+}
+
+function storeViewMode(mode: KeymapViewMode): void {
+  try {
+    localStorage.setItem(VIEW_MODE_STORAGE_KEY, mode);
+  } catch {
+    // プライベートモード等で書けなくても致命的ではない。
+  }
+}
 
 export function Editor() {
   const connection = useConnectionStore((s) => s.state);
@@ -111,6 +138,20 @@ export function Editor() {
 
   const [hoverCell, setHoverCell] = useState<{ row: number; col: number } | null>(null);
 
+  // 実機イラスト ⇄ グリッドの表示切替。実機ビューは kobu の 4x10
+  // マトリクス専用なので、別レイアウトが来たらグリッドへ強制する。
+  const [viewMode, setViewMode] = useState<KeymapViewMode>(loadViewMode);
+  const physicalAvailable = definition !== null && isKobuMatrix(definition.matrix);
+  const effectiveView: KeymapViewMode = physicalAvailable ? viewMode : 'grid';
+  const switchView = (mode: KeymapViewMode) => {
+    setViewMode(mode);
+    storeViewMode(mode);
+  };
+
+  // イラスト上のトラックボール選択。キーセルの選択と排他にして、
+  // 下のドックを KeycodeDock ⇄ TrackballDock で切り替える。
+  const [selectedBall, setSelectedBall] = useState<BallSide | null>(null);
+
   const currentSelected = selected;
   const layerKeymap = local?.[activeLayer] ?? [];
   const currentKeycode = currentSelected
@@ -131,6 +172,11 @@ export function Editor() {
       }
       if (!dimensions) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      if (e.key === 'Escape') {
+        setSelectedBall(null);
+        return;
+      }
 
       // Arrow keys: move the selection on the active layer's matrix.
       if (
@@ -188,12 +234,44 @@ export function Editor() {
 
       <UnlockPanel />
 
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-sm text-zinc-500 dark:text-zinc-400">
-          レイヤー{' '}
-          <span className="text-zinc-900 dark:text-zinc-100 font-medium">{activeLayer}</span>
-          {' / '}全 {dimensions.layers} 層
-        </h3>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-3">
+          <h3 className="text-sm text-zinc-500 dark:text-zinc-400">
+            レイヤー{' '}
+            <span className="text-zinc-900 dark:text-zinc-100 font-medium">{activeLayer}</span>
+            {' / '}全 {dimensions.layers} 層
+          </h3>
+          {physicalAvailable && (
+            <div className="inline-flex overflow-hidden rounded-lg border border-zinc-300 dark:border-zinc-700 text-xs">
+              <button
+                type="button"
+                aria-pressed={effectiveView === 'physical'}
+                onClick={() => switchView('physical')}
+                className={[
+                  'px-2.5 py-1 transition-colors',
+                  effectiveView === 'physical'
+                    ? 'bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900'
+                    : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800',
+                ].join(' ')}
+              >
+                実機
+              </button>
+              <button
+                type="button"
+                aria-pressed={effectiveView === 'grid'}
+                onClick={() => switchView('grid')}
+                className={[
+                  'px-2.5 py-1 transition-colors border-l border-zinc-300 dark:border-zinc-700',
+                  effectiveView === 'grid'
+                    ? 'bg-zinc-900 text-zinc-50 dark:bg-zinc-100 dark:text-zinc-900'
+                    : 'bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800',
+                ].join(' ')}
+              >
+                グリッド
+              </button>
+            </div>
+          )}
+        </div>
         <p className="text-xs text-zinc-500 dark:text-zinc-400 flex flex-wrap items-center gap-x-2">
           <span>
             <kbd className="rounded border border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-1 font-mono text-[10px]">
@@ -230,30 +308,64 @@ export function Editor() {
       </div>
 
       <div className="rounded-xl border border-zinc-200 dark:border-zinc-800 bg-gradient-to-b from-zinc-50 to-white dark:from-zinc-900 dark:to-zinc-950 shadow-sm p-4">
-        <KeymapView
-          definition={definition}
-          keymap={layerKeymap}
-          selected={currentSelected ? { row: currentSelected.row, col: currentSelected.col } : null}
-          isDirty={(row, col) => isCellDirty(editorState, { layer: activeLayer, row, col })}
-          chordCells={unlockChord}
-          chordActive={unlockActive}
-          onCellClick={(row, col) => {
-            selectCell({ layer: activeLayer, row, col });
-          }}
-          onCellHover={(cell) => setHoverCell(cell)}
-        />
+        {effectiveView === 'physical' ? (
+          <PhysicalKeymapView
+            definition={definition}
+            keymap={layerKeymap}
+            selected={
+              currentSelected ? { row: currentSelected.row, col: currentSelected.col } : null
+            }
+            isDirty={(row, col) => isCellDirty(editorState, { layer: activeLayer, row, col })}
+            chordCells={unlockChord}
+            chordActive={unlockActive}
+            onCellClick={(row, col) => {
+              setSelectedBall(null);
+              selectCell({ layer: activeLayer, row, col });
+            }}
+            onCellHover={(cell) => setHoverCell(cell)}
+            selectedBall={selectedBall}
+            onBallClick={(side) => {
+              setSelectedBall(side);
+              selectCell(null);
+            }}
+          />
+        ) : (
+          <KeymapView
+            definition={definition}
+            keymap={layerKeymap}
+            selected={
+              currentSelected ? { row: currentSelected.row, col: currentSelected.col } : null
+            }
+            isDirty={(row, col) => isCellDirty(editorState, { layer: activeLayer, row, col })}
+            chordCells={unlockChord}
+            chordActive={unlockActive}
+            onCellClick={(row, col) => {
+              setSelectedBall(null);
+              selectCell({ layer: activeLayer, row, col });
+            }}
+            onCellHover={(cell) => setHoverCell(cell)}
+          />
+        )}
       </div>
 
-      <KeycodeDock
-        definition={definition}
-        layerCount={dimensions.layers}
-        selected={currentSelected ? { row: currentSelected.row, col: currentSelected.col } : null}
-        current={currentKeycode}
-        hover={hoverKeycode}
-        onPick={(kc) => {
-          if (currentSelected) applyKeyToSelection(kc);
-        }}
-      />
+      {selectedBall !== null ? (
+        <TrackballDock
+          side={selectedBall}
+          onClose={() => setSelectedBall(null)}
+          onEditMouseLayer={selectedBall === 'right' ? () => setActiveLayer(4) : undefined}
+        />
+      ) : (
+        <KeycodeDock
+          definition={definition}
+          layerCount={dimensions.layers}
+          selected={currentSelected ? { row: currentSelected.row, col: currentSelected.col } : null}
+          current={currentKeycode}
+          hover={hoverKeycode}
+          onPick={(kc) => {
+            if (currentSelected) applyKeyToSelection(kc);
+          }}
+        />
+      )}
 
       {activeLayer === 3 && (
         <BluetoothPanel

@@ -182,10 +182,11 @@ interface SettingRowProps {
   onChange: (next: number) => void;
 }
 
-function SettingRow({ keyName, value, onChange }: SettingRowProps) {
+/** スライダー / トグル 1 行。`TrackballDock` からも再利用される。 */
+export function SettingRow({ keyName, value, onChange }: SettingRowProps) {
   const def = KOBU_VALUES.find((v) => v.key === keyName);
   if (!def) return null;
-  const label = LABELS[keyName];
+  const label = SETTING_LABELS[keyName];
 
   if (def.type === 'bool') {
     return (
@@ -246,7 +247,8 @@ interface SettingLabel {
   step?: number;
 }
 
-const LABELS: Record<KobuSettingKey, SettingLabel> = {
+/** 設定キー → 表示ラベル。`TrackballDock` と共有する単一の出典。 */
+export const SETTING_LABELS: Record<KobuSettingKey, SettingLabel> = {
   trackball_cpi: {
     title: 'CPI',
     description: 'ポインタ感度の倍率。大きいほど動きが速くなります。',

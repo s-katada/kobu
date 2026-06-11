@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { KeyboardLayoutDef } from '../protocol/handshake';
@@ -153,5 +153,63 @@ describe('Editor integration', () => {
     useConnectionStore.setState({ state: { kind: 'idle' } });
     rerender(<Editor />);
     await waitFor(() => expect(useEditorStore.getState().phase.kind).toBe('empty'));
+  });
+
+  it('defaults to the physical illustration view with both trackballs', async () => {
+    primeReady();
+    render(<Editor />);
+    await waitFor(() => expect(useEditorStore.getState().phase.kind).toBe('ready'));
+
+    expect(screen.getByLabelText('kobu キーボード（実機ビュー）')).toBeInTheDocument();
+    expect(screen.getByLabelText('左トラックボール（スクロール）の設定')).toBeInTheDocument();
+    expect(screen.getByLabelText('右トラックボール（ポインタ）の設定')).toBeInTheDocument();
+  });
+
+  it('clicking a trackball swaps the keycode dock for the trackball dock', async () => {
+    primeReady();
+    render(<Editor />);
+    await waitFor(() => expect(useEditorStore.getState().phase.kind).toBe('ready'));
+
+    expect(screen.getByText('キーコードピッカー')).toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText('右トラックボール（ポインタ）の設定'));
+
+    expect(screen.queryByText('キーコードピッカー')).toBeNull();
+    expect(screen.getByText('右トラックボール')).toBeInTheDocument();
+    // ドック内にスコープ — ページ下部の KobuSettingsPanel にも CPI スライダーがある。
+    const dock = within(screen.getByLabelText('右トラックボールの設定'));
+    expect(dock.getByLabelText('CPI')).toBeInTheDocument();
+    // ボール選択はセル選択を解除する。
+    expect(useEditorStore.getState().selected).toBeNull();
+
+    // キーをクリックするとピッカーに戻る。
+    await userEvent.click(screen.getByLabelText(/^行 0 列 0:/));
+    expect(screen.getByText('キーコードピッカー')).toBeInTheDocument();
+    expect(screen.queryByText('右トラックボール')).toBeNull();
+  });
+
+  it('Escape closes the trackball dock', async () => {
+    primeReady();
+    render(<Editor />);
+    await waitFor(() => expect(useEditorStore.getState().phase.kind).toBe('ready'));
+
+    await userEvent.click(screen.getByLabelText('左トラックボール（スクロール）の設定'));
+    expect(screen.getByText('左トラックボール')).toBeInTheDocument();
+
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByText('左トラックボール')).toBeNull();
+    expect(screen.getByText('キーコードピッカー')).toBeInTheDocument();
+  });
+
+  it('toggles between physical and grid views', async () => {
+    primeReady();
+    render(<Editor />);
+    await waitFor(() => expect(useEditorStore.getState().phase.kind).toBe('ready'));
+
+    await userEvent.click(screen.getByRole('button', { name: 'グリッド' }));
+    expect(screen.getByLabelText('kobu キーマップ')).toBeInTheDocument();
+    expect(screen.queryByLabelText('kobu キーボード（実機ビュー）')).toBeNull();
+
+    await userEvent.click(screen.getByRole('button', { name: '実機' }));
+    expect(screen.getByLabelText('kobu キーボード（実機ビュー）')).toBeInTheDocument();
   });
 });
