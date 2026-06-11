@@ -33,6 +33,7 @@ fn main() {
     patch_rmk_split_conn_low_latency();
     patch_rmk_split_conn_event_length();
     patch_rmk_split_conn_event_min_reservation();
+    patch_rmk_macro_sdc_buffers();
     patch_rmk_split_state_resync_fast();
     patch_rmk_force_ble_conn_type();
     patch_rmk_force_hid_cccd_on_connect();
@@ -4676,4 +4677,107 @@ fn patch_rmk_split_conn_event_min_reservation() {
     fs::write(&path, contents).unwrap_or_else(|e| {
         panic!("kobu: failed to write {}: {e}", path.display());
     });
+}
+/// step8 — SDC controller L2CAP queue depth 3 -> 8 (+ Mem headroom). The
+/// rmk-macro #[rmk_central]/#[rmk_peripheral] expansion builds the nrf-sdc
+/// controller with `buffer_cfg(MTU, MTU, L2CAP_TXQ=3, L2CAP_RXQ=3)` — three
+/// outbound packets per link. The split slave (right half) can therefore have
+/// at most ~3 PDUs ready per connection event; combined with refill jitter on
+/// the busy executor that caps the real split drain near the 125/s pointer
+/// production rate, leaving a standing backlog (HW-proven by the step6
+/// coalescing side-effect) that rides as cursor 追従遅延. 8 lets the slave
+/// stream a whole backlog within one (step5c/7-extended) event and gives the
+/// central's RX side matching absorption. Mem pools grow accordingly
+/// (RAM cost ~+6-8 KB per half out of 255 KB — trivial; an undersized Mem
+/// would defmt::unwrap-panic at boot, so the bump errs generous).
+fn patch_rmk_macro_sdc_buffers() {
+    const MACRO_VERSION: &str = "0.7.1";
+
+    // (1) bind_interrupt.rs: queue depths.
+    {
+        const MARKER: &str = "// kobu: SDC L2CAP queue depth 3 -> 8 applied";
+        let Some(path) = find_rmk_macro_file(MACRO_VERSION, "src/bind_interrupt.rs") else {
+            println!(
+                "cargo:warning=kobu: could not find rmk-macro-{MACRO_VERSION} bind_interrupt.rs; \
+                 SDC buffer patch was not applied"
+            );
+            return;
+        };
+        println!("cargo:rerun-if-changed={}", path.display());
+        let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("kobu: failed to read {}: {e}", path.display());
+        });
+        if !contents.contains(MARKER) {
+            let edits = [
+                (
+                    "const L2CAP_TXQ: u8 = 3;",
+                    "const L2CAP_TXQ: u8 = 8; // kobu: 3 -> 8, stream several PDUs per CE (split slave drain)",
+                ),
+                (
+                    "const L2CAP_RXQ: u8 = 3;",
+                    "const L2CAP_RXQ: u8 = 8; // kobu: 3 -> 8, absorb several PDUs per CE (central RX)",
+                ),
+            ];
+            for (from, to) in edits {
+                if !contents.contains(from) {
+                    panic!(
+                        "kobu: SDC buffer anchor `{from}` missing in rmk-macro-{MACRO_VERSION} {}; \
+                         upstream changed \u{2014} update firmware/build.rs::patch_rmk_macro_sdc_buffers",
+                        path.display()
+                    );
+                }
+                contents = contents.replace(from, to);
+            }
+            contents.push('\n');
+            contents.push_str(MARKER);
+            contents.push('\n');
+            fs::write(&path, contents).unwrap_or_else(|e| {
+                panic!("kobu: failed to write {}: {e}", path.display());
+            });
+        }
+    }
+
+    // (2) chip_init.rs: SDC memory pool headroom for the deeper queues.
+    {
+        const MARKER: &str = "// kobu: SDC mem headroom for queue depth 8 applied";
+        let Some(path) = find_rmk_macro_file(MACRO_VERSION, "src/chip_init.rs") else {
+            println!(
+                "cargo:warning=kobu: could not find rmk-macro-{MACRO_VERSION} chip_init.rs; \
+                 SDC mem patch was not applied"
+            );
+            return;
+        };
+        println!("cargo:rerun-if-changed={}", path.display());
+        let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("kobu: failed to read {}: {e}", path.display());
+        });
+        if !contents.contains(MARKER) {
+            let edits = [
+                (
+                    "                // For central\n                4096 + peri_num * 2304",
+                    "                // For central\n                10240 + peri_num * 4096 // kobu: headroom for L2CAP_TXQ/RXQ 8",
+                ),
+                (
+                    "                // For peripheral\n                6144",
+                    "                // For peripheral\n                12288 // kobu: headroom for L2CAP_TXQ/RXQ 8",
+                ),
+            ];
+            for (from, to) in edits {
+                if !contents.contains(from) {
+                    panic!(
+                        "kobu: SDC mem anchor missing in rmk-macro-{MACRO_VERSION} {}; \
+                         upstream changed \u{2014} update firmware/build.rs::patch_rmk_macro_sdc_buffers",
+                        path.display()
+                    );
+                }
+                contents = contents.replace(from, to);
+            }
+            contents.push('\n');
+            contents.push_str(MARKER);
+            contents.push('\n');
+            fs::write(&path, contents).unwrap_or_else(|e| {
+                panic!("kobu: failed to write {}: {e}", path.display());
+            });
+        }
+    }
 }
