@@ -246,9 +246,16 @@ morses = [
 # next key) reliably yields the TAP instead of an accidental layer/modifier (the
 # ZMK tap-preferred behaviour the user finds smooth). Trade-off: to USE the layer
 # you now HOLD the thumb deliberately (~200ms) rather than quick-chording.
-# hold_timeout 350->200ms matches ZMK's tapping-term. Tuning: if resting a finger
+# hold_timeout 350->200ms matched ZMK's tapping-term. Tuning: if resting a finger
 # on the thumb key falsely triggers the layer, raise hold_timeout toward 250-300ms.
-FH = { hold_on_other_press = false, hold_timeout = "200ms", gap_timeout = "200ms" }
+#
+# 2026-06-11: 200 -> 250ms (user-picked). At 200ms a deliberate-but-unhurried
+# Space tap (IME 変換) sometimes crossed the hold edge: no Space was emitted at
+# all (the key became a layer hold), so 変換されずに Enter → unconverted text.
+# +50ms keeps taps taps; the cost is layer/modifier engaging ~50ms later on a
+# deliberate hold-alone. ⚠️ FLASH-STORED (see the [behavior.morse] note above):
+# apply via one clearlayout flash, then the normal UF2.
+FH = { hold_on_other_press = false, hold_timeout = "250ms", gap_timeout = "200ms" }
 
 [[behavior.macro.macros]]
 operations = [
