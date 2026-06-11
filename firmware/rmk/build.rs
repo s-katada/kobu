@@ -33,6 +33,7 @@ fn main() {
     patch_rmk_split_conn_low_latency();
     patch_rmk_split_conn_event_length();
     patch_rmk_split_conn_event_min_reservation();
+    patch_rmk_split_conn_offbeat_interval();
     patch_rmk_macro_sdc_buffers();
     patch_rmk_split_state_resync_fast();
     patch_rmk_force_ble_conn_type();
@@ -4686,4 +4687,53 @@ fn patch_rmk_macro_sdc_buffers() {
             });
         }
     }
+}
+/// step10 — split interval 7.5 ms -> 8.75 ms: break the locked 2:1 harmonic
+/// with the 15 ms Mac host link. Both links share the central's single radio;
+/// at exactly half the Mac interval, a bad phase alignment makes the SAME
+/// split connection events collide with Mac events INDEFINITELY (clock drift
+/// between the two masters rotates the phase only on a ~minutes scale). The
+/// HW-isolated 追従遅延 trigger (combined scroll+pointer load, i.e. maximum
+/// radio pressure on both links, persisting until a short idle lets macOS
+/// re-anchor) fits a chronic-collision episode. 8.75 ms (7 x 1.25 ms units) has
+/// LCM(8.75, 15) = 105 ms, so any collision recurs at 1-in-12 split events
+/// instead of every-other — self-healing by construction. Pointer cadence cost:
+/// 7.5 -> 8.75 ms ceiling (~114 Hz), imperceptible.
+fn patch_rmk_split_conn_offbeat_interval() {
+    const MARKER: &str = "// kobu: split off-harmonic interval applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/split/ble/central.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} split/ble/central.rs; \
+             split off-harmonic interval patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = "        min_connection_interval: Duration::from_micros(7500),\n        max_connection_interval: Duration::from_micros(7500),";
+    let to = "        min_connection_interval: Duration::from_micros(8750), // kobu (step10): off-harmonic vs the 15ms Mac link (7 x 1.25ms; LCM 105ms) — a bad phase can no longer pin every other split event\n        max_connection_interval: Duration::from_micros(8750),";
+    if !contents.contains(from) {
+        panic!(
+            "kobu: split off-harmonic anchor missing in rmk-{RMK_VERSION} {} \
+             (must run AFTER patch_rmk_split_conn_low_latency); upstream/patches changed \u{2014} \
+             update firmware/build.rs::patch_rmk_split_conn_offbeat_interval",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
 }
