@@ -196,7 +196,12 @@ combos = [
     { actions = ["O", "P"], output = "Equal" },                          # combo_plus (pos 8,9)
     { actions = ["J", "K"], output = "LeftBracket" },                    # combo_lbkt (pos 16,17)
     { actions = ["K", "L"], output = "RightBracket" },                   # combo_rbkt (pos 17,18)
-    { actions = ["L", "Semicolon"], output = "Quote" },                  # combo_squote (pos 18,19)
+    # combo_squote (pos 18,19). RMK combos match the keymap's FULL KeyAction
+    # (combo.rs: `a == *key_action`), NOT the bare keycode — a plain "Semicolon"
+    # here never matched the MT key, so this combo was dead since the port.
+    # Spell out the exact MT action per layer (layer-0 Mac + layer-1 Win).
+    { actions = ["L", "MT(Semicolon, LGui|LShift, FH)"], output = "Quote" },
+    { actions = ["L", "MT(Semicolon, LCtrl|LShift, FH)"], output = "Quote" },
     { actions = ["N", "M"], output = "Backspace" },                      # combo_bspc (pos 25,26)
     { actions = ["Comma", "Dot"], output = "Slash" },                    # combo_question (pos 27,28)
     { actions = ["D", "F"], output = "WM(No, LGui|LAlt)", layer = 0 },   # combo_cmd_alt (pos 12,13, Mac)
@@ -213,6 +218,15 @@ forks = [
 ]
 
 [behavior.morse]
+# Flow Tap (QMK) — the typing-streak guard: a morse key (Space/Enter LTs, the
+# thumb MTs, …) PRESSED within `prior_idle_time` of the previous key press
+# resolves as an INSTANT TAP, in order. This is what makes a fast roll like
+# "git s" come out as "git s" (previously the rolled Space resolved as a
+# layer-2 HOLD the moment `s` went down → "git@"), and makes Space/英数 taps
+# feel immediate while typing. After ≥150ms of idle the normal hold logic
+# below applies, so deliberate layer/modifier chords are unaffected.
+enable_flow_tap = true
+prior_idle_time = "150ms"
 hold_on_other_press = true
 hold_timeout = "200ms"
 gap_timeout = "200ms"
@@ -255,7 +269,20 @@ morses = [
 # +50ms keeps taps taps; the cost is layer/modifier engaging ~50ms later on a
 # deliberate hold-alone. ⚠️ FLASH-STORED (see the [behavior.morse] note above):
 # apply via one clearlayout flash, then the normal UF2.
-FH = { hold_on_other_press = false, hold_timeout = "250ms", gap_timeout = "200ms" }
+# ⚠️ rmk-macro 0.7.1 BUG (behavior.rs expand_profile): a mode flag set to
+# `false` compiles to mode=None = "inherit the [behavior.morse] default" — so
+# the old `hold_on_other_press = false` here was a silent NO-OP ever since R27
+# and every FH key actually ran in HoldOnOtherPress mode (inherited from the
+# top level). That is why rolled taps kept turning into holds ("git s" →
+# "git@", holdが早すぎる) no matter how hold_timeout was tuned. Only `= true`
+# flags actually select a mode; never write `= false` expecting an override.
+#
+# Design (2026-06-12, Flow Tap + hold-on-other-press):
+#   * typing streak (<150ms since last press)  → instant TAP  (flow tap above)
+#   * deliberate chord after an idle beat      → instant HOLD (no timeout wait
+#     for layers/modifiers — the "ホールド時間が長い" fix)
+#   * solo deliberate hold                     → 250ms (IME-変換 miss guard)
+FH = { hold_on_other_press = true, hold_timeout = "250ms", gap_timeout = "200ms" }
 
 [[behavior.macro.macros]]
 operations = [
