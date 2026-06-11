@@ -99,8 +99,8 @@ keymap = [
     # Layer 0 — Mac / default (ZMK default_layer)
     [
         ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
-        ["A", "S", "D", "F", "G", "H", "J", "K", "L", "MT(Semicolon, LGui|LShift, FH)"],
-        ["Z", "X", "C", "V", "B", "N", "M", "Comma", "Dot", "MT(Slash, LGui|LCtrl, FH)"],
+        ["A", "S", "D", "F", "G", "H", "J", "K", "L", "MT(Semicolon, LGui|LShift, BAL)"],
+        ["Z", "X", "C", "V", "B", "N", "M", "Comma", "Dot", "MT(Slash, LGui|LCtrl, BAL)"],
         # Thumb row, layer 0. LEFT cols are reversed so keymap col 4 = /COL0 =
         # XIAO直下 (innermost) and col 1 = /COL3 = outer edge; RIGHT cols are
         # natural so col 5 = /COL0 = 直下 and col 8 = /COL3 = outer edge. cols 0
@@ -117,14 +117,14 @@ keymap = [
         # Win/Linux modifiers) still sit at their old columns and so no longer
         # line up with these shifted base-layer thumbs — shift them too if that
         # cross-layer alignment is wanted.
-        ["No", "MT(Backspace, LGui, FH)", "LCtrl", "MT(Language2, LShift, FH)", "Backspace", "Backspace", "MT(Escape, LAlt, FH)", "LT(2, Space, FH)", "LT(3, Enter, FH)", "No"],
+        ["No", "MT(Backspace, LGui, MTH)", "LCtrl", "MT(Language2, LShift, MTH)", "Backspace", "Backspace", "MT(Escape, LAlt, MTH)", "LT(2, Space, FH)", "LT(3, Enter, FH)", "No"],
     ],
     # Layer 1 — Win/Linux overlay (ZMK layer1)
     [
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
-        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Semicolon, LCtrl|LShift, FH)"],
-        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Slash, LCtrl|LAlt, FH)"],
-        ["_", "_", "MT(Backspace, LAlt, FH)", "LT(5, LGui, FH)", "_", "MT(Escape, LGui, FH)", "_", "_", "_", "_"],
+        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Semicolon, LCtrl|LShift, BAL)"],
+        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Slash, LCtrl|LAlt, BAL)"],
+        ["_", "_", "MT(Backspace, LAlt, MTH)", "LT(5, LGui, FH)", "_", "MT(Escape, LGui, MTH)", "_", "_", "_", "_"],
     ],
     # Layer 2 — numbers / symbols (ZMK layer2)
     [
@@ -135,7 +135,7 @@ keymap = [
         # SAME physical thumb on the base layer is 英数 (Language2, Layer 0 col3):
         # so tap-on-base = English, hold-LT(2)+that-thumb = Japanese — per the
         # user's request to split the two (base English / layer-2 Japanese).
-        ["_", "_", "_", "MT(Language1, LShift, FH)", "_", "_", "_", "_", "_", "_"],
+        ["_", "_", "_", "MT(Language1, LShift, MTH)", "_", "_", "_", "_", "_", "_"],
     ],
     # Layer 3 — settings, media, BLE (ZMK layer3). Source &bt BT_SEL 0..3 →
     # kobu User0..User3; source &bt BT_CLR → User6. BT_SEL 4 at pos 4 is
@@ -219,7 +219,7 @@ gap_timeout = "200ms"
 morses = [
     { tap = "WM(K, LCtrl)", double_tap = "Macro(0)" },              # TD(0) = td_kill_line
     { tap = "Home", double_tap = "WM(A, LCtrl)" },                  # TD(1) = td_home_ctla
-    { tap = "WM(LeftBracket, LGui)", hold = "LShift", profile = "FH" },  # TD(2) = mt LSHFT LG(LBKT) on layer 4
+    { tap = "WM(LeftBracket, LGui)", hold = "LShift", profile = "MTH" },  # TD(2) = mt LSHFT LG(LBKT) on layer 4 (stock &mt = hold-preferred)
 ]
 
 # `hold_timeout` = how long you hold an FH key (the LT layer-taps LT(2,Space)/
@@ -239,23 +239,28 @@ morses = [
 # keymap+behavior and rewrites from this file, KEEPS BLE bonds), then flash the
 # normal kobu-rmk-central.uf2.
 [behavior.morse.profiles]
-# Round 27: matched to ZMK/KobitoKey's "tap-preferred" hold-tap flavor to fix the
-# "tap と hold が紛らわしい / 誤爆" feel. `hold_on_other_press = false` means pressing
-# another key during the hold window NO LONGER forces a hold — the thumb key only
-# becomes a hold (layer/mod) after `hold_timeout`, so a fast roll (thumb-tap then
-# next key) reliably yields the TAP instead of an accidental layer/modifier (the
-# ZMK tap-preferred behaviour the user finds smooth). Trade-off: to USE the layer
-# you now HOLD the thumb deliberately (~200ms) rather than quick-chording.
-# hold_timeout 350->200ms matched ZMK's tapping-term. Tuning: if resting a finger
-# on the thumb key falsely triggers the layer, raise hold_timeout toward 250-300ms.
-#
-# 2026-06-11: 200 -> 250ms (user-picked). At 200ms a deliberate-but-unhurried
-# Space tap (IME 変換) sometimes crossed the hold edge: no Space was emitted at
-# all (the key became a layer hold), so 変換されずに Enter → unconverted text.
-# +50ms keeps taps taps; the cost is layer/modifier engaging ~50ms later on a
-# deliberate hold-alone. ⚠️ FLASH-STORED (see the [behavior.morse] note above):
-# apply via one clearlayout flash, then the normal UF2.
-FH = { hold_on_other_press = false, hold_timeout = "250ms", gap_timeout = "200ms" }
+# 2026-06-12 — TRUE KobitoKey parity (user: "KobitoKeyと同じ設定にして").
+# Earlier rounds (R27, and the 2026-06-11 250ms bump) assumed KobitoKey was
+# uniformly tap-preferred; reading KobitoKey.keymap shows it actually mixes
+# THREE flavors, all at 200ms / quick-tap 0:
+#   * stock `&lt` (Space/Enter/layer1-LGui)      = tap-preferred
+#       -> FH  (normal_mode: hold ONLY via the 200ms timeout)
+#   * stock `&mt` (thumb mods + LANG keys)        = hold-preferred
+#       -> MTH (hold_on_other_press: chording another key resolves HOLD
+#          instantly — thumb+letter gives the modifier at any speed)
+#   * custom ht_* (home-row `;` and `/` mods)     = balanced
+#       -> BAL (permissive_hold: another key pressed AND RELEASED while held
+#          resolves HOLD; a fast roll-through still yields the tap)
+# The uniform-tap-preferred era forced every modifier hold to wait the full
+# timeout, which read as "holdになるまでの時間が短すぎる/長すぎる" depending on
+# the key — the fix is the right FLAVOR per key, not a longer timeout.
+# If the IME-変換 Space miss (2026-06-11) ever returns, raise ONLY FH's
+# hold_timeout toward 250ms — the MT/BAL keys should stay at 200.
+# ⚠️ FLASH-STORED (see the [behavior.morse] note above): apply via one
+# clearlayout flash, then the normal UF2.
+FH  = { normal_mode = true, hold_timeout = "200ms", gap_timeout = "200ms" }
+MTH = { hold_on_other_press = true, hold_timeout = "200ms", gap_timeout = "200ms" }
+BAL = { permissive_hold = true, hold_timeout = "200ms", gap_timeout = "200ms" }
 
 [[behavior.macro.macros]]
 operations = [
