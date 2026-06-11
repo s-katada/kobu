@@ -142,30 +142,37 @@ impl<'d> PeripheralLedController<'d> {
         }
     }
 
-    /// Diagnostic (feature `led-conn-diag`): show this peripheral's pointer
-    /// PRODUCTION rate (samples/sec from the RIGHT PMW3610, windowed ~500 ms),
-    /// to compare against the central's ARRIVAL-rate LED. If THIS LED is GREEN
-    /// (sensor producing ~125/s) but the central LED is RED (receiving few) →
-    /// the loss is split TRANSIT. If THIS LED is also RED → the sensor itself is
-    /// producing too few samples (production). Off = not mousing.
-    ///   Off : 0/s (idle) · Green: >80/s · Yellow: 30–80/s · Red: 1–29/s.
+    /// Diagnostic (feature `led-conn-diag`), v2 — 追従遅延 hunt: show the DEPTH
+    /// of this peripheral's EVENT_CHANNEL (the 16-deep queue between the PMW3610
+    /// device loop and the split write loop). If pointer samples pool here, queue
+    /// depth IS cursor latency (each slot ≈ one 8 ms sample the cursor is behind
+    /// the hand). Sampled every 50 ms poll, PEAK-held over a ~500 ms window so a
+    /// transiently-deep queue is visible to the eye.
+    ///   Green: 0–1 (no backlog) · Blue: 2–3 · Yellow: 4–7 · Red: ≥8 (≥64 ms behind).
+    /// Mouse continuously and watch the RIGHT half's LED: solid Green during lag
+    /// = the backlog is NOT here (suspicion moves to the central); Yellow/Red =
+    /// found it (flash the step6-coalesce peripheral UF2).
     #[allow(dead_code)]
     fn diag_apply(&mut self) {
-        self.samples_accum +=
-            rmk::input_device::battery::KOBU_PERIPHERAL_SAMPLES.swap(0, Ordering::Relaxed);
+        let depth = rmk::channel::EVENT_CHANNEL.len() as u32;
+        // Peak-hold: samples_accum doubles as the window's max depth.
+        if depth > self.samples_accum {
+            self.samples_accum = depth;
+        }
         if Instant::now() - self.window_start >= Duration::from_millis(500) {
-            self.last_rate = self.samples_accum * 2; // 500 ms window → per-second
+            self.last_rate = self.samples_accum; // displayed peak
             self.samples_accum = 0;
             self.window_start = Instant::now();
         }
-        let color = if self.last_rate == 0 {
-            Color::Off
-        } else if self.last_rate > 80 {
-            Color::Green
-        } else if self.last_rate >= 30 {
-            Color::Yellow
-        } else {
+        let peak = self.last_rate.max(self.samples_accum);
+        let color = if peak >= 8 {
             Color::Red
+        } else if peak >= 4 {
+            Color::Yellow
+        } else if peak >= 2 {
+            Color::Blue
+        } else {
+            Color::Green
         };
         self.apply(color);
     }

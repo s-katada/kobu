@@ -51,6 +51,7 @@ fn main() {
     patch_rmk_kobu_wedge_drag_atomics();
     patch_rmk_set_host_connected();
     patch_rmk_timeout_split_writes();
+    patch_rmk_split_peripheral_coalesce_events();
     patch_rmk_capture_mouse_buttons();
     patch_rmk_pmw3610_slower_poll();
     // Round 8 — the boot-trackball wedge (R1–R7 all failed). Root cause: the
@@ -4526,6 +4527,99 @@ fn patch_rmk_split_conn_event_length() {
         );
     }
     contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+/// step6 — peripheral-side freshness: merge backlogged Joystick samples into ONE
+/// split message. The peripheral pipeline is sensor poll (8 ms) -> EVENT_CHANNEL
+/// (16 deep) -> split write loop (one bounded write per event). Whenever the
+/// write cycle falls behind the 125/s sample rate (radio contention with the
+/// central's Mac link, timeout retries), the queue depth becomes pure cursor
+/// LATENCY: the central keeps receiving fresh-RATE but stale-CONTENT samples —
+/// the sustained-motion 追従遅延 that recovers after a short idle. Draining the
+/// queue into the in-flight message bounds that latency to ~one write cycle:
+/// total travel is preserved (values saturating-add, same coalescing the central
+/// PointerProcessor already does in pend_*), and when the queue is empty (the
+/// healthy case) this is a no-op try_receive. Non-Joystick events found while
+/// draining (battery, ~per-minute) are forwarded separately, then draining stops.
+fn patch_rmk_split_peripheral_coalesce_events() {
+    const MARKER: &str = "// kobu: peripheral joystick coalescing applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/split/peripheral.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} split/peripheral.rs; \
+             peripheral coalescing patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let edits = [
+        // (1) the Joystick event needs to be mutable to merge into.
+        (
+            "embassy_futures::select::Either3::Third(e) => {",
+            "embassy_futures::select::Either3::Third(mut e) => {",
+        ),
+        // (2) drain-merge right before the connected-write. Anchors on the
+        //     original debug line ("split event", distinct from the key arm's
+        //     "split key event"); the round-8 bounded write below is untouched.
+        (
+            r#"                    if CONNECTION_STATE.load(core::sync::atomic::Ordering::Acquire) {
+                        debug!("Writing split event to central: {:?}", e);"#,
+            r#"                    // kobu (step6): freshness — fold any backlogged Joystick
+                    // samples into THIS message so queue depth never becomes
+                    // cursor latency. Healthy case: try_receive is empty, no-op.
+                    if let crate::event::Event::Joystick(ref mut axes) = e {
+                        while let Ok(next) = crate::channel::EVENT_CHANNEL.try_receive() {
+                            match next {
+                                crate::event::Event::Joystick(n) => {
+                                    for (a, b) in axes.iter_mut().zip(n.iter()) {
+                                        a.value = a.value.saturating_add(b.value);
+                                    }
+                                }
+                                other => {
+                                    // Rare non-pointer event (battery etc.):
+                                    // forward it on its own, then stop draining.
+                                    if CONNECTION_STATE.load(core::sync::atomic::Ordering::Acquire) {
+                                        let _ = ::embassy_time::with_timeout(
+                                            ::embassy_time::Duration::from_millis(20),
+                                            self.split_driver.write(&SplitMessage::Event(other)),
+                                        )
+                                        .await;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if CONNECTION_STATE.load(core::sync::atomic::Ordering::Acquire) {
+                        debug!("Writing split event to central: {:?}", e);"#,
+        ),
+    ];
+    for (from, to) in edits {
+        if !contents.contains(from) {
+            panic!(
+                "kobu: coalescing anchor `{}` missing in rmk-{RMK_VERSION} {}; \
+                 upstream/patches changed \u{2014} update \
+                 firmware/build.rs::patch_rmk_split_peripheral_coalesce_events",
+                &from[..40.min(from.len())],
+                path.display()
+            );
+        }
+        contents = contents.replace(from, to);
+    }
 
     contents.push('\n');
     contents.push_str(MARKER);
