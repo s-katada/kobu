@@ -99,7 +99,7 @@ keymap = [
     # Layer 0 — Mac / default (ZMK default_layer)
     [
         ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
-        ["A", "S", "D", "F", "G", "H", "J", "K", "L", "MT(Semicolon, LGui|LShift, FH)"],
+        ["A", "S", "D", "F", "G", "H", "J", "K", "L", "TD(3)"],
         ["Z", "X", "C", "V", "B", "N", "M", "Comma", "Dot", "MT(Slash, LGui|LCtrl, FH)"],
         # Thumb row, layer 0. LEFT cols are reversed so keymap col 4 = /COL0 =
         # XIAO直下 (innermost) and col 1 = /COL3 = outer edge; RIGHT cols are
@@ -122,14 +122,14 @@ keymap = [
     # Layer 1 — Win/Linux overlay (ZMK layer1)
     [
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
-        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Semicolon, LCtrl|LShift, FH)"],
+        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "TD(4)"],
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Slash, LCtrl|LAlt, FH)"],
         ["_", "_", "MT(Backspace, LAlt, FH)", "LT(5, LGui, FH)", "_", "MT(Escape, LGui, FH)", "_", "_", "_", "_"],
     ],
     # Layer 2 — numbers / symbols (ZMK layer2)
     [
         ["Kc1", "Kc2", "Kc3", "Kc4", "Kc5", "Kc6", "Kc7", "Kc8", "Kc9", "Kc0"],
-        ["WM(Kc1, LShift)", "WM(Kc2, LShift)", "WM(Kc3, LShift)", "WM(Kc4, LShift)", "WM(Kc5, LShift)", "Left", "Down", "Up", "Right", "_"],
+        ["WM(Kc1, LShift)", "WM(Kc2, LShift)", "WM(Kc3, LShift)", "WM(Kc4, LShift)", "WM(Kc5, LShift)", "Left", "Down", "Up", "Right", "Semicolon"],
         ["WM(Kc6, LShift)", "WM(Kc7, LShift)", "WM(Kc8, LShift)", "WM(Kc9, LShift)", "WM(Kc0, LShift)", "No", "No", "No", "No", "_"],
         # Layer-2 language thumb = かな/Shift (Language1 = Japanese IME on). The
         # SAME physical thumb on the base layer is 英数 (Language2, Layer 0 col3):
@@ -191,7 +191,7 @@ combos = [
     { actions = ["Q", "W"], output = "Grave" },                          # combo_grave (pos 0,1)
     { actions = ["A", "S"], output = "Tab" },                            # combo_tab (pos 10,11)
     { actions = ["Y", "U"], output = "Backspace" },                      # combo_yu_bspc (pos 5,6)
-    { actions = ["U", "I"], output = "Backslash" },                      # combo_pipe (pos 6,7) → fork to `|`
+    { actions = ["U", "I"], output = "WM(Backslash, LShift)" },          # combo_pipe (pos 6,7) — emits `|` directly (forks removed)
     { actions = ["I", "O"], output = "Minus" },                          # combo_minus (pos 7,8)
     { actions = ["O", "P"], output = "Equal" },                          # combo_plus (pos 8,9)
     { actions = ["J", "K"], output = "LeftBracket" },                    # combo_lbkt (pos 16,17)
@@ -200,8 +200,8 @@ combos = [
     # (combo.rs: `a == *key_action`), NOT the bare keycode — a plain "Semicolon"
     # here never matched the MT key, so this combo was dead since the port.
     # Spell out the exact MT action per layer (layer-0 Mac + layer-1 Win).
-    { actions = ["L", "MT(Semicolon, LGui|LShift, FH)"], output = "Quote" },
-    { actions = ["L", "MT(Semicolon, LCtrl|LShift, FH)"], output = "Quote" },
+    { actions = ["L", "TD(3)"], output = "Quote" },
+    { actions = ["L", "TD(4)"], output = "Quote" },
     { actions = ["N", "M"], output = "Backspace" },                      # combo_bspc (pos 25,26)
     { actions = ["Comma", "Dot"], output = "Slash" },                    # combo_question (pos 27,28)
     { actions = ["D", "F"], output = "WM(No, LGui|LAlt)", layer = 0 },   # combo_cmd_alt (pos 12,13, Mac)
@@ -210,12 +210,13 @@ combos = [
     { actions = ["S", "D"], output = "TG(6)", layer = 6 },               # combo_neovim_toggle (pos 11,12, Neovim → back)
 ]
 
-# Fork — ZMK mod-morph (colon/semicolon, pipe/backslash)
+# Fork — REMOVED 2026-06-12. rmk 0.8.2 forks never actually applied to morse
+# taps or combo outputs (see the TD(3) note above); the two former forks are
+# replaced by static equivalents: the :/; key is TD(3)/TD(4) (tap = ':' via
+# WM, ';' = layer-2 Semicolon on the same position), and the U+I combo emits
+# WM(Backslash, LShift) = '|' directly.
 [behavior.fork]
-forks = [
-    { trigger = "Semicolon", negative_output = "WM(Semicolon, LShift)", positive_output = "Semicolon", match_any = "LShift|RShift" },
-    { trigger = "Backslash", negative_output = "WM(Backslash, LShift)", positive_output = "Backslash", match_any = "LShift|RShift" },
-]
+forks = []
 
 [behavior.morse]
 # Flow Tap (QMK) — the typing-streak guard: a morse key (Space/Enter LTs, the
@@ -234,6 +235,16 @@ morses = [
     { tap = "WM(K, LCtrl)", double_tap = "Macro(0)" },              # TD(0) = td_kill_line
     { tap = "Home", double_tap = "WM(A, LCtrl)" },                  # TD(1) = td_home_ctla
     { tap = "WM(LeftBracket, LGui)", hold = "LShift", profile = "FH" },  # TD(2) = mt LSHFT LG(LBKT) on layer 4
+    # TD(3)/TD(4) — the :/; key, fork-free (2026-06-12). rmk 0.8.2's fork engine
+    # turned out to be unfinished plumbing: forks are only consulted in
+    # process_key_action_inner on raw KeyActions, which morse taps and combo
+    # outputs never traverse (TapHold never equals a Single trigger), and the
+    # choke-point experiment exposed further stuck-state/suppression holes. So
+    # the inversion is now STATIC: tap = WM(Semicolon, LShift) = ':' always;
+    # ';' lives on layer 2 at the same finger (Space-hold + this key, instant
+    # via hold_on_other_press). Holds keep the old MT modifiers.
+    { tap = "WM(Semicolon, LShift)", hold = "WM(No, LGui|LShift)", profile = "FH" },   # TD(3) = :/Cmd+Shift (Mac)
+    { tap = "WM(Semicolon, LShift)", hold = "WM(No, LCtrl|LShift)", profile = "FH" },  # TD(4) = :/Ctrl+Shift (Win, layer 1)
 ]
 
 # `hold_timeout` = how long you hold an FH key (the LT layer-taps LT(2,Space)/
@@ -468,7 +479,7 @@ cs = "P0_09"
 split_peripherals_num = 1
 ble_profiles_num = 4
 combo_max_num = 16
-morse_max_num = 4
+morse_max_num = 6
 macro_space_size = 256
 fork_max_num = 8
 
