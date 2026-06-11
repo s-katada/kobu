@@ -32,6 +32,7 @@ fn main() {
     patch_rmk_host_conn_low_latency();
     patch_rmk_split_conn_low_latency();
     patch_rmk_split_conn_event_length();
+    patch_rmk_split_conn_event_min_reservation();
     patch_rmk_split_state_resync_fast();
     patch_rmk_force_ble_conn_type();
     patch_rmk_force_hid_cccd_on_connect();
@@ -4620,6 +4621,54 @@ fn patch_rmk_split_peripheral_coalesce_events() {
         }
         contents = contents.replace(from, to);
     }
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+/// step7 — RESERVE split-link radio time (min CE length 0 -> 2 ms). step5c
+/// raised only the CEILING (max 4 ms); with min still 0 the SDC guarantees the
+/// split link nothing, and the Mac host link (15 ms = exactly 2x the 7.5 ms
+/// split interval, a locked harmonic) can chronically squeeze the shared-radio
+/// schedule so split events drain ~1 PDU or get shortened — production 125/s >
+/// drain, the peripheral EVENT_CHANNEL backlogs (proven on HW: the step6
+/// coalescing experiment changed behavior, which it only can when the queue is
+/// non-empty), and queue depth rides as cursor latency. A 2 ms hard floor per
+/// 7.5 ms event (~27% airtime) forces room for several PDUs per event while
+/// leaving the 15 ms Mac link its slots.
+fn patch_rmk_split_conn_event_min_reservation() {
+    const MARKER: &str = "// kobu: split CE min reservation applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/split/ble/central.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} split/ble/central.rs; \
+             split CE min reservation patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = "        min_event_length: Duration::from_secs(0),\n        max_event_length: Duration::from_micros(4_000),";
+    let to = "        min_event_length: Duration::from_micros(2_000), // kobu (step7): hard floor — guarantee split airtime against the locked 15ms Mac-link harmonic\n        max_event_length: Duration::from_micros(4_000),";
+    if !contents.contains(from) {
+        panic!(
+            "kobu: split CE min-reservation anchor missing in rmk-{RMK_VERSION} {} \
+             (must run AFTER patch_rmk_split_conn_event_length); upstream/patches changed \u{2014} \
+             update firmware/build.rs::patch_rmk_split_conn_event_min_reservation",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
 
     contents.push('\n');
     contents.push_str(MARKER);
