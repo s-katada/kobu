@@ -252,9 +252,7 @@ function buildLeftGeometry(): LeftGeometry {
     }
   }
 
-  const hinge = sw5
-    ? { x: sw5.x + HINGE_OFFSET.x, y: sw5.y + HINGE_OFFSET.y }
-    : { x: 0, y: 0 };
+  const hinge = sw5 ? { x: sw5.x + HINGE_OFFSET.x, y: sw5.y + HINGE_OFFSET.y } : { x: 0, y: 0 };
 
   return { keys, ball, xiao, thumbLine, filler, hinge };
 }
@@ -412,8 +410,7 @@ export function kobuPhysicalLayout(): PhysicalLayout {
     const topEdge = topKey.y - KEY_H / 2 - PLATE_PAD;
     const capBottom = topKey.y + ROW_PITCH * 2 + KEY_H / 2 + PLATE_PAD;
     const bandTop = col >= 1 ? bandTopAt(topKey.x) : null;
-    const bottomEdge =
-      bandTop === null ? capBottom : Math.max(capBottom, bandTop - MAIN_THUMB_GAP);
+    const bottomEdge = bandTop === null ? capBottom : Math.max(capBottom, bandTop - MAIN_THUMB_GAP);
     const p = toLeft({ x: topKey.x, y: topEdge });
     const leftRect: PlateRect = {
       side: 'left',

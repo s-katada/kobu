@@ -74,30 +74,30 @@ export function PhysicalKeymapView({
           style={{ width: `${width}px`, height: `${height}px` }}
           onMouseLeave={() => onCellHover?.(null)}
         >
-        <Underlay layout={layout} />
-        {layout.keys.map((key) => {
-          const value = keymap[key.row]?.[key.col] ?? 0;
-          const label = labelForKeycode(value, { definition });
-          const isSelected =
-            selected !== null && selected.row === key.row && selected.col === key.col;
-          const isChord =
-            chordActive === true &&
-            chordCells?.some((c) => c.row === key.row && c.col === key.col) === true;
-          return (
-            <PhysicalKeycap
-              key={`${key.row}-${key.col}`}
-              physicalKey={key}
-              keyWidth={layout.keyWidthMm * SCALE}
-              keyHeight={layout.keyHeightMm * SCALE}
-              label={label}
-              selected={isSelected}
-              dirty={isDirty(key.row, key.col)}
-              chord={isChord}
-              onClick={() => onCellClick(key.row, key.col)}
-              onMouseEnter={() => onCellHover?.({ row: key.row, col: key.col })}
-            />
-          );
-        })}
+          <Underlay layout={layout} />
+          {layout.keys.map((key) => {
+            const value = keymap[key.row]?.[key.col] ?? 0;
+            const label = labelForKeycode(value, { definition });
+            const isSelected =
+              selected !== null && selected.row === key.row && selected.col === key.col;
+            const isChord =
+              chordActive === true &&
+              chordCells?.some((c) => c.row === key.row && c.col === key.col) === true;
+            return (
+              <PhysicalKeycap
+                key={`${key.row}-${key.col}`}
+                physicalKey={key}
+                keyWidth={layout.keyWidthMm * SCALE}
+                keyHeight={layout.keyHeightMm * SCALE}
+                label={label}
+                selected={isSelected}
+                dirty={isDirty(key.row, key.col)}
+                chord={isChord}
+                onClick={() => onCellClick(key.row, key.col)}
+                onMouseEnter={() => onCellHover?.({ row: key.row, col: key.col })}
+              />
+            );
+          })}
           {layout.balls.map((ball) => (
             <TrackballButton
               key={ball.side}
@@ -125,7 +125,9 @@ function Underlay({ layout }: UnderlayProps) {
   // 実機のハウジングはベアリング窓が Y 字配置（下 1 つ + 上 2 つ）。
   const notchAngles = [90, 235, 305];
   const bandPath = (p: (typeof layout.thumbPlates)[number]) =>
-    p.points.map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x.toFixed(2)} ${pt.y.toFixed(2)}`).join(' ');
+    p.points
+      .map((pt, i) => `${i === 0 ? 'M' : 'L'} ${pt.x.toFixed(2)} ${pt.y.toFixed(2)}`)
+      .join(' ');
   const sides = ['left', 'right'] as const;
   return (
     <svg
@@ -166,7 +168,12 @@ function Underlay({ layout }: UnderlayProps) {
             {band && (
               <>
                 {bump && (
-                  <circle cx={bump.x} cy={bump.y} r={bump.radius + 0.6} className="kobu-seam-fill" />
+                  <circle
+                    cx={bump.x}
+                    cy={bump.y}
+                    r={bump.radius + 0.6}
+                    className="kobu-seam-fill"
+                  />
                 )}
                 <path
                   d={bandPath(band)}
