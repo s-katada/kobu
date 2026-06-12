@@ -222,6 +222,7 @@ fn main() {
     patch_rmk_morse_shift_chord_instant_tap();
     patch_rmk_colon_native_invert();
     patch_rmk_colon_chord_combo_aware();
+    patch_rmk_flow_tapped_space_language_rescue();
     patch_rmk_clearlayout_resync_vial_tables();
 
     generate_vial_config();
@@ -5336,6 +5337,130 @@ fn patch_rmk_colon_chord_combo_aware() {
         }
         contents = contents.replace(from, to);
     }
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+/// Space+語サム rescue (2026-06-12). The user's mid-typing Japanese-switch
+/// gesture is Space-hold + 英数サム (= layer-2 Language1). Inside a typing
+/// streak the Space LT FLOW-TAPS at press (the prized instant 変換 feel), so
+/// the gesture degraded to: a literal space gets typed, layer 2 never
+/// engages, and the thumb emits base-layer Language2 — "spaceが入力されて、
+/// かなに切り替わらない". Rather than deferring the flow tap (which would
+/// cost the praised at-press feel for every conversion space), detect the
+/// exact failure pattern at the language thumb's press: a flow-tapped Space
+/// is still PHYSICALLY HELD (its HeldKey sits in PBRNRY(Key(Space)) until
+/// the physical release). Then: erase the just-typed space with a Backspace
+/// tap, emit Language1 (the gesture's intent — かな) directly, and park the
+/// thumb as PBRNRY(No) so its physical release is a clean no-op. Fires ONLY
+/// in this pattern: solo 変換 taps, git-s rolls, layer-2 numbers after a
+/// pause, and plain 英数 taps are all untouched.
+fn patch_rmk_flow_tapped_space_language_rescue() {
+    const MARKER: &str = "// kobu: flow-tapped-space language rescue applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard/morse.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard/morse.rs; \
+             flow-tapped-space language rescue was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    // Anchor on the tail of the v3 hoisted block (our own injected text) so
+    // this runs right before the buffer match, after the shift-chord check.
+    let from = r#"                        return;
+                    }
+                }
+            }
+            match self.held_buffer.find_pos_mut(event.pos) {"#;
+    let to = r#"                        return;
+                    }
+                }
+            }
+            // kobu (Space+語サム rescue): the user pressed a language thumb
+            // while a flow-tapped Space is still physically held — the
+            // mid-streak Japanese-switch gesture. Undo the streak-typed
+            // space and emit Language1 (かな) directly; park the thumb so
+            // its release is a no-op. See build.rs for the full rationale.
+            {
+                let kobu_is_lang_thumb = if let KeyAction::TapHold(tap_action, _, _) = key_action {
+                    matches!(
+                        *tap_action,
+                        Action::Key(rmk_types::keycode::KeyCode::Language1)
+                            | Action::Key(rmk_types::keycode::KeyCode::Language2)
+                    )
+                } else {
+                    false
+                };
+                if kobu_is_lang_thumb {
+                    let kobu_space_flow_tapped = self.held_buffer.keys.iter().any(|kk| {
+                        kk.event.pos != event.pos
+                            && matches!(
+                                kk.state,
+                                KeyState::ProcessedButReleaseNotReportedYet(Action::Key(
+                                    rmk_types::keycode::KeyCode::Space
+                                ))
+                            )
+                    });
+                    if kobu_space_flow_tapped {
+                        let mut kobu_release = event;
+                        kobu_release.pressed = false;
+                        // Erase the streak-typed space…
+                        self.process_key_action_normal(
+                            Action::Key(rmk_types::keycode::KeyCode::Backspace),
+                            event,
+                        )
+                        .await;
+                        self.process_key_action_normal(
+                            Action::Key(rmk_types::keycode::KeyCode::Backspace),
+                            kobu_release,
+                        )
+                        .await;
+                        // …and switch to Japanese (the gesture's intent).
+                        self.process_key_action_normal(
+                            Action::Key(rmk_types::keycode::KeyCode::Language1),
+                            event,
+                        )
+                        .await;
+                        self.process_key_action_normal(
+                            Action::Key(rmk_types::keycode::KeyCode::Language1),
+                            kobu_release,
+                        )
+                        .await;
+                        // Park the thumb: its physical release replays a no-op.
+                        self.held_buffer.push(HeldKey::new(
+                            event,
+                            *key_action,
+                            KeyState::ProcessedButReleaseNotReportedYet(Action::No),
+                            pressed_time,
+                            timeout_time,
+                        ));
+                        return;
+                    }
+                }
+            }
+            match self.held_buffer.find_pos_mut(event.pos) {"#;
+    if !contents.contains(from) {
+        panic!(
+            "kobu: language-rescue anchor missing in rmk-{RMK_VERSION} {} \
+             (must run AFTER patch_rmk_colon_chord_combo_aware); upstream/patches changed \u{2014} \
+             update firmware/build.rs::patch_rmk_flow_tapped_space_language_rescue",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
 
     contents.push('\n');
     contents.push_str(MARKER);
