@@ -205,6 +205,23 @@ fn main() {
     // (precedent: the 2026-05-15 BAS addition).
     patch_trouble_gap_ppcp();
 
+    // :/; final round (2026-06-12) — host truth: the Mac's Karabiner-Elements
+    // "Exchange semicolon and colon" rule (no device filter) inverts ; and :
+    // for EVERY keyboard, so the firmware emits NORMAL US semantics and the
+    // host rule does the swap (see keyboard.toml [behavior.morse] notes).
+    // Patch 1 makes the Shift+';' chord resolve at the PRESS edge like a real
+    // keyboard (rmk otherwise emits morse taps at release time with that
+    // instant's modifiers — the era-P fast-chord failure). Patch 2 turns the
+    // clearlayout ritual into a FULL config resync: Vial-written combo/fork/
+    // morse/macro flash slots previously survived every reset and were
+    // overlaid over keyboard.toml at boot (fill_vec pads to capacity, then
+    // read_* overwrite per index). Both anchor on PRISTINE files
+    // (keyboard/morse.rs, storage/mod.rs — no other kobu patch touches them)
+    // — order-independent. NEW registry patches ⇒ one
+    // `cargo clean --release -p rmk` before the next build (R7/R8 gotcha).
+    patch_rmk_morse_shift_chord_instant_tap();
+    patch_rmk_clearlayout_resync_vial_tables();
+
     generate_vial_config();
 
     let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
@@ -4853,6 +4870,226 @@ fn patch_rmk_flow_tap_exempt_language_held() {
         panic!(
             "kobu: flow-tap held-keys anchor missing in rmk-{RMK_VERSION} {}; upstream changed \u{2014} \
              update firmware/build.rs::patch_rmk_flow_tap_exempt_language_held",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// :/; final round (part 1/2) — press-edge tap for the colon key under Shift.
+/// HOST TRUTH (verified in ~/.config/karabiner/karabiner.json): the Mac runs
+/// Karabiner-Elements "Exchange semicolon and colon" with NO device filter, so
+/// the firmware must emit normal-US semantics (tap ';', Shift-chord Shift+';')
+/// and let the host rule render ':'/';'. rmk resolves a morse tap at the
+/// RELEASE event with the modifier state of that instant (keyboard.rs Release
+/// arm / morse.rs release prediction), so a fast chord whose Shift (thumb MT,
+/// fired via hold-on-other-press) is gone by the release — finger order, or
+/// the peripheral key-up arriving late over the split BLE link — degraded to
+/// a bare ';' (the era-P ③/④ failures). A real keyboard resolves Shift+';' at
+/// the PRESS edge; this adds exactly that, with the same mechanics as rmk's
+/// own FlowTap arm (fire, then park as ProcessedButReleaseNotReportedYet so
+/// the physical release replays the saved action via the existing arm at
+/// morse.rs:147-156). Ordering is safe by construction: fire_held_keys runs
+/// HoldOnOtherPress decisions (registering the thumb's Shift) BEFORE the
+/// current key reaches process_key_action_inner, and dispatch_combos flushes
+/// the combo-parked ;-press before any later event — including the Shift
+/// release — is applied. Scoped to Semicolon taps only, so every thumb MT/LT
+/// keeps its hold reachable under Shift.
+fn patch_rmk_morse_shift_chord_instant_tap() {
+    const MARKER: &str = "// kobu: morse shift-chord instant tap (Semicolon) applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard/morse.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard/morse.rs; \
+             morse shift-chord instant tap was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"                None => {
+                    // Add to buffer
+                    self.held_buffer.push(HeldKey::new(
+                        event,
+                        *key_action,
+                        KeyState::Pressed(MorsePattern::default()),
+                        pressed_time,
+                        timeout_time,
+                    ));
+                }"#;
+    let to = r#"                None => {
+                    // kobu: shift-aware ':' key — press-edge tap under Shift.
+                    // If a Shift modifier is already registered (the 英数
+                    // thumb's hold, fired via HoldOnOtherPress in this same
+                    // processing pass, or resolved earlier by timeout) when
+                    // the :/; tap-hold key goes down, resolve it as a TAP at
+                    // PRESS time like a plain key on a normal keyboard: the
+                    // Semicolon press shares one hid report with the held
+                    // Shift, so the host (Karabiner "Exchange semicolon and
+                    // colon") sees Shift+; = ';' regardless of release order
+                    // or split-BLE latency. Park as PBRNRY exactly like the
+                    // FlowTap arm; the physical release replays the saved
+                    // action. Trade-off: under a held Shift this key can no
+                    // longer become its hold (Cmd/Ctrl+Shift) — redundant
+                    // while Shift is already down.
+                    if let KeyAction::TapHold(tap_action, _, _) = key_action
+                        && matches!(*tap_action, Action::Key(rmk_types::keycode::KeyCode::Semicolon))
+                        && (self.held_modifiers
+                            & (rmk_types::modifier::ModifierCombination::LSHIFT
+                                | rmk_types::modifier::ModifierCombination::RSHIFT))
+                            .into_bits()
+                            != 0
+                    {
+                        let action = *tap_action;
+                        self.process_key_action_normal(action, event).await;
+                        self.held_buffer.push(HeldKey::new(
+                            event,
+                            *key_action,
+                            KeyState::ProcessedButReleaseNotReportedYet(action),
+                            pressed_time,
+                            timeout_time,
+                        ));
+                    } else {
+                        // Add to buffer
+                        self.held_buffer.push(HeldKey::new(
+                            event,
+                            *key_action,
+                            KeyState::Pressed(MorsePattern::default()),
+                            pressed_time,
+                            timeout_time,
+                        ));
+                    }
+                }"#;
+    if !contents.contains(from) {
+        panic!(
+            "kobu: morse press-arm anchor missing in rmk-{RMK_VERSION} {}; upstream changed \u{2014} \
+             update firmware/build.rs::patch_rmk_morse_shift_chord_instant_tap",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// :/; final round (part 2/2) — clearlayout = FULL config resync.
+/// rmk boots by OVERLAYING flash over the compiled config: keymap.rs:94-115
+/// fill_vec-pads forks/morses to capacity, then read_keymap/read_combos/
+/// read_forks/read_morses overwrite per index (host/storage.rs:155-286), and
+/// rmk-0.8.2 ships with build-hash invalidation commented out (upstream
+/// storage/mod.rs check_enable), so stale Vial-written slots persist across
+/// every plain reflash. The stock reset_layout_only (= the clear_layout
+/// ritual) rewrites ONLY layout options + behavior timings + keymap +
+/// encoders — combo/fork/morse/macro slots SURVIVE the documented ritual and
+/// can silently shadow keyboard.toml (with forks = [] the padded default
+/// slots are still overlay targets). Rewrite every slot from the compiled
+/// config so one clearlayout flash deterministically makes stored state ==
+/// keyboard.toml. BLE bonds untouched.
+fn patch_rmk_clearlayout_resync_vial_tables() {
+    const MARKER: &str = "// kobu: clearlayout vial-table resync applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/storage/mod.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} storage/mod.rs; \
+             clearlayout vial-table resync was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"        Ok(())
+    }
+
+    async fn check_enable(&mut self) -> bool {"#;
+    let to = r#"        // kobu: the stock reset wrote only layout+behavior+keymap+encoders;
+        // Vial-written combo/fork/morse/macro flash slots survived every
+        // documented clearlayout ritual and were overlaid over the compiled
+        // config at boot (fill_vec pads forks/morses to capacity, then the
+        // read_* fns overwrite per index). Rewrite every slot from the
+        // compiled config so clear_layout=true is a FULL config resync.
+        for (i, slot) in behavior.combo.combos.iter().enumerate() {
+            let config = slot
+                .as_ref()
+                .map(|c| c.config)
+                .unwrap_or_else(crate::combo::ComboConfig::empty);
+            store_item(
+                &mut self.flash,
+                self.storage_range.clone(),
+                &mut cache,
+                &mut self.buffer,
+                &get_combo_key(i as u8),
+                &StorageData::VialData(KeymapData::Combo(i as u8, config)),
+            )
+            .await?;
+        }
+        for i in 0..behavior.fork.forks.capacity() {
+            let fork = behavior.fork.forks.get(i).copied().unwrap_or_default();
+            store_item(
+                &mut self.flash,
+                self.storage_range.clone(),
+                &mut cache,
+                &mut self.buffer,
+                &get_fork_key(i as u8),
+                &StorageData::VialData(KeymapData::Fork(i as u8, fork)),
+            )
+            .await?;
+        }
+        for i in 0..behavior.morse.morses.capacity() {
+            let morse = behavior.morse.morses.get(i).cloned().unwrap_or_default();
+            store_item(
+                &mut self.flash,
+                self.storage_range.clone(),
+                &mut cache,
+                &mut self.buffer,
+                &get_morse_key(i as u8),
+                &StorageData::VialData(KeymapData::Morse(i as u8, morse)),
+            )
+            .await?;
+        }
+        store_item(
+            &mut self.flash,
+            self.storage_range.clone(),
+            &mut cache,
+            &mut self.buffer,
+            &(StorageKeys::MacroData as u32),
+            &StorageData::VialData(KeymapData::Macro(behavior.keyboard_macros.macro_sequences)),
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    async fn check_enable(&mut self) -> bool {"#;
+    if !contents.contains(from) {
+        panic!(
+            "kobu: reset_layout_only tail anchor missing in rmk-{RMK_VERSION} {}; upstream changed \u{2014} \
+             update firmware/build.rs::patch_rmk_clearlayout_resync_vial_tables",
             path.display()
         );
     }
