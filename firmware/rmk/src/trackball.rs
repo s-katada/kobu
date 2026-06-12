@@ -108,15 +108,15 @@ const AUTO_MOUSE_LAYER: u8 = 4;
 /// typing-friendly — only click-friendly. Clicks (button edges) and held
 /// buttons re-arm it, so double-click chains and drags are timeout-free.
 ///
-/// 600 → 400 ms (2026-06-12 #2, user: 「ちょっと有効時間が長い」): the instant
-/// typing-kill only covers keys that fall through TRANSPARENT layer-4 slots —
-/// the dense layer-4 positions (mouse buttons on Y/U/I/O, Cmd+C/V, Tab/LGui…)
-/// execute their layer-4 function instead, so the idle window is the ONLY
-/// bound on "typed y/u/i/o right after mousing becomes a stray click". 400 ms
-/// still covers the typical stop→aim→click gap (~200-400 ms) while halving
-/// that exposure. If clicks start missing again, nudge toward 500; if stray
-/// clicks still annoy, nudge toward 300.
-const AUTO_MOUSE_TIMEOUT: Duration = Duration::from_millis(400);
+/// 600 → 400 → 300 ms (2026-06-12 #2, user: 「ちょっと有効時間が長い」, then
+/// picked 300): the instant typing-kill only covers keys that fall through
+/// TRANSPARENT layer-4 slots — the dense layer-4 positions (mouse buttons on
+/// Y/U/I/O, Cmd+C/V, Tab/LGui…) execute their layer-4 function instead, so
+/// the idle window is the ONLY bound on "typed y/u/i/o right after mousing
+/// becomes a stray click". 300 ms sits just above the fast end of the human
+/// stop→aim→click gap (~200-400 ms) — the 150 ms era broke clicking outright,
+/// so treat 300 as the floor; if clicks start missing, go back to 400.
+const AUTO_MOUSE_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// Poll cadence of the ACTIVE hold loop. Bounds the worst-case latency of the
 /// typing-kill and of click-edge detection. 25 ms is far below the ~80 ms+ gap
