@@ -148,20 +148,23 @@ keymap = [
         ["TO(0)", "TG(1)", "No", "No", "User6", "F11", "F12", "F13", "No", "_"],
         ["_", "_", "_", "_", "_", "Delete", "_", "_", "_", "_"],
     ],
-    # Layer 4 — mouse (ZMK layer4; trackball motion is separate). Source pos
-    # 10 (mt LSHFT LG(LBKT) = tap Cmd+[, hold LShift) → TD(2), defined in
-    # [behavior.morse] below since RMK MT cannot express tap=key+modifier.
-    # Source pos 7 of row 0 is `mkp MB2` (apparent typo for MB3) — ported
-    # verbatim per "正確に実装".
+    # Layer 4 — mouse (ZMK layer4; trackball motion is separate). Per the
+    # user's request the LEFT hand and both thumbs are transparent (`_`) so
+    # they fall through to layer 0 — the left hand types normally while the
+    # right ball auto-activates this layer. Because a transparent layer-4
+    # fallthrough to a non-modifier stamps KOBU_LAST_TYPING_TICKS (via
+    # build.rs::patch_rmk_typing_tick), the first left-hand keystroke also
+    # drops the auto-mouse layer instantly. Only the RIGHT hand keeps mouse-
+    # layer bindings: the three mouse buttons, which resolve AT layer 4 and so
+    # never kill the layer (you can click while mousing). Source pos 7 of row 0
+    # is `mkp MB2` (apparent typo for MB3) — ported verbatim per "正確に実装".
+    # Removed when the left hand went transparent: the old Cmd+[ / Cmd+] tab-
+    # nav, TD(2) Shift, Tab + held-Cmd cmd-tab cluster, Ctrl, and Cmd+C/V.
+    # TD(2) in [behavior.morse] is now unreferenced.
     [
-        ["WM(LeftBracket, LGui|LShift)", "WM(RightBracket, LGui|LShift)", "No", "No", "No", "MouseBtn1", "MouseBtn2", "MouseBtn2", "MouseBtn3", "_"],
-        # cols 2/3 (= left-hand D / F home keys): Tab + held LGui, so you can
-        # cmd+tab app-switch WHILE mousing the right ball — hold LGui (F, index)
-        # and tap Tab (D, middle) to cycle apps. KobitoKey reaches cmd+tab the
-        # same way (a held Cmd thumb + Tab); the auto-mouse layer used to hijack
-        # the thumbs so kobu couldn't, hence exposing held-Cmd + Tab here.
-        ["TD(2)", "WM(RightBracket, LGui)", "Tab", "LGui", "No", "No", "No", "No", "No", "_"],
-        ["LCtrl", "No", "WM(C, LGui)", "WM(V, LGui)", "No", "No", "No", "No", "No", "_"],
+        ["_", "_", "_", "_", "_", "MouseBtn1", "MouseBtn2", "MouseBtn2", "MouseBtn3", "_"],
+        ["_", "_", "_", "_", "_", "No", "No", "No", "No", "_"],
+        ["_", "_", "_", "_", "_", "No", "No", "No", "No", "_"],
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
     ],
     # Layer 5 — Emacs (ZMK layer5)
@@ -257,7 +260,7 @@ gap_timeout = "200ms"
 morses = [
     { tap = "WM(K, LCtrl)", double_tap = "Macro(0)" },              # TD(0) = td_kill_line
     { tap = "Home", double_tap = "WM(A, LCtrl)" },                  # TD(1) = td_home_ctla
-    { tap = "WM(LeftBracket, LGui)", hold = "LShift", profile = "FH" },  # TD(2) = mt LSHFT LG(LBKT) on layer 4
+    { tap = "WM(LeftBracket, LGui)", hold = "LShift", profile = "FH" },  # TD(2) = mt LSHFT LG(LBKT) — was layer-4 left hand, now UNUSED (left hand went transparent); kept so TD(0)/TD(1) indices don't shift
     # TD(3)/TD(4) REMOVED (2026-06-12 #2, the Karabiner discovery). Root cause
     # of the :/; saga was OUTSIDE the firmware: this Mac runs Karabiner-Elements
     # "Exchange semicolon and colon" (no device filter), so the screen shows the
