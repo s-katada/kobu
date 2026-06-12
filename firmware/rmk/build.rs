@@ -221,6 +221,7 @@ fn main() {
     // `cargo clean --release -p rmk` before the next build (R7/R8 gotcha).
     patch_rmk_morse_shift_chord_instant_tap();
     patch_rmk_colon_native_invert();
+    patch_rmk_colon_chord_combo_aware();
     patch_rmk_clearlayout_resync_vial_tables();
 
     generate_vial_config();
@@ -5209,6 +5210,127 @@ fn patch_rmk_colon_native_invert() {
                 "kobu: colon-invert anchor missing in rmk-{RMK_VERSION} {} \
                  (must run AFTER patch_rmk_morse_shift_chord_instant_tap); upstream/patches changed \u{2014} \
                  update firmware/build.rs::patch_rmk_colon_native_invert",
+                path.display()
+            );
+        }
+        contents = contents.replace(from, to);
+    }
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+/// :/; native inversion v3 — make the shift-chord press-edge COMBO-AWARE.
+/// HW + code-proven failure of v1/v2: the ;-key is a member of the L+; quote
+/// combo, so its press is parked in held_buffer as KeyState::WaitingCombo
+/// (keyboard.rs process_buffered_key); on combo flush the press re-enters
+/// process_key_action_morse where find_pos_mut returns Some(k) and the stock
+/// Some-arm only handles Released — the None-arm (where v1/v2 lived) NEVER
+/// ran for this key, so the chord tap resolved at RELEASE via the shift-blind
+/// ':' transform and every Shift-chord produced ':' on HW. v3 hoists the
+/// press-edge ABOVE the buffer match so it fires for BOTH fresh presses and
+/// combo-flushed (WaitingCombo) presses: emit a PLAIN Semicolon with Shift
+/// masked from that one report (mod-morph masking), drop any parked
+/// WaitingCombo entry, park as ProcessedButReleaseNotReportedYet (the stock
+/// arm replays the release). The old None-arm branch is left in place but
+/// made unreachable (&& false). Accepted edge: Shift+L+; no longer forms the
+/// quote combo (the chord consumes the key first) — not a used gesture.
+fn patch_rmk_colon_chord_combo_aware() {
+    const MARKER: &str = "// kobu: colon chord combo-aware press-edge (v3) applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard/morse.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard/morse.rs; \
+             colon chord combo-aware patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let edits = [
+        // (1) hoisted combo-aware press-edge, before the buffer match
+        (
+            r#"            let timeout_time = pressed_time + Self::morse_timeout(&self.keymap.borrow(), key_action, true);
+            match self.held_buffer.find_pos_mut(event.pos) {"#,
+            r#"            let timeout_time = pressed_time + Self::morse_timeout(&self.keymap.borrow(), key_action, true);
+            // kobu v3: shift-chord press-edge, COMBO-AWARE — must fire for
+            // fresh presses AND combo-flushed presses (the L+; quote combo
+            // parks this key as WaitingCombo; the stock Some-arm ignores it,
+            // which silently skipped the old None-arm logic). Emit a PLAIN
+            // Semicolon with the held Shift masked out of that one report,
+            // then park as PBRNRY so the physical release replays normally.
+            {
+                let kobu_is_semi = if let KeyAction::TapHold(tap_action, _, _) = key_action {
+                    matches!(*tap_action, Action::Key(rmk_types::keycode::KeyCode::Semicolon))
+                } else {
+                    false
+                };
+                let kobu_shifted = (self.held_modifiers
+                    & (rmk_types::modifier::ModifierCombination::LSHIFT
+                        | rmk_types::modifier::ModifierCombination::RSHIFT))
+                    .into_bits()
+                    != 0;
+                if kobu_is_semi && kobu_shifted {
+                    let kobu_state_ok = match self.held_buffer.find_pos_mut(event.pos) {
+                        None => true,
+                        Some(k) => matches!(k.state, KeyState::WaitingCombo),
+                    };
+                    if kobu_state_ok {
+                        let _ = self.held_buffer.remove_if(|kk| kk.event.pos == event.pos);
+                        let action = Action::Key(rmk_types::keycode::KeyCode::Semicolon);
+                        let kobu_saved_mods = self.held_modifiers;
+                        self.held_modifiers = rmk_types::modifier::ModifierCombination::from_bits(
+                            kobu_saved_mods.into_bits()
+                                & !((rmk_types::modifier::ModifierCombination::LSHIFT
+                                    | rmk_types::modifier::ModifierCombination::RSHIFT)
+                                    .into_bits()),
+                        );
+                        self.process_key_action_normal(action, event).await;
+                        self.held_modifiers = kobu_saved_mods;
+                        self.held_buffer.push(HeldKey::new(
+                            event,
+                            *key_action,
+                            KeyState::ProcessedButReleaseNotReportedYet(action),
+                            pressed_time,
+                            timeout_time,
+                        ));
+                        return;
+                    }
+                }
+            }
+            match self.held_buffer.find_pos_mut(event.pos) {"#,
+        ),
+        // (2) neutralize the old (unreachable-for-combo-members) None-arm branch
+        (
+            r#"                            .into_bits()
+                            != 0
+                    {
+                        // kobu v2 (native inversion): the chord must yield a"#,
+            r#"                            .into_bits()
+                            != 0
+                        // kobu v3: superseded by the hoisted combo-aware block
+                        // above; branch kept for reference but unreachable.
+                        && false
+                    {
+                        // kobu v2 (native inversion): the chord must yield a"#,
+        ),
+    ];
+    for (from, to) in edits {
+        if !contents.contains(from) {
+            panic!(
+                "kobu: v3 anchor missing in rmk-{RMK_VERSION} {} \
+                 (must run AFTER patch_rmk_colon_native_invert); upstream/patches changed \u{2014} \
+                 update firmware/build.rs::patch_rmk_colon_chord_combo_aware",
                 path.display()
             );
         }
