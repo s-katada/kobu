@@ -220,6 +220,7 @@ fn main() {
     // — order-independent. NEW registry patches ⇒ one
     // `cargo clean --release -p rmk` before the next build (R7/R8 gotcha).
     patch_rmk_morse_shift_chord_instant_tap();
+    patch_rmk_colon_native_invert();
     patch_rmk_clearlayout_resync_vial_tables();
 
     generate_vial_config();
@@ -5094,6 +5095,125 @@ fn patch_rmk_clearlayout_resync_vial_tables() {
         );
     }
     contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+/// :/; native inversion (2026-06-12 #3). The Karabiner "Exchange semicolon
+/// and colon" rule is now DEVICE-SCOPED to exclude kobu (device_unless
+/// vendor 19279 / product 16985 added to ~/.config/karabiner/karabiner.json),
+/// so the firmware itself renders the swap the user wants, host-independent:
+///   tap alone        → Shift+Semicolon  (':' on US, atomic with_modifiers report)
+///   Shift + key      → plain Semicolon  (';') with the held Shift MASKED out
+///                      of the press report (ZMK mod-morph-style masking),
+///                      resolved at the PRESS edge by the v1 patch
+///   layer-2 position → plain "Semicolon" (';', plain Single — untouched here)
+/// Three small edits on top of patch_rmk_morse_shift_chord_instant_tap (must
+/// run AFTER it in main(); on a fresh registry v1 creates the block first):
+/// (a) the v1 press-edge emission masks LShift/RShift around the report;
+/// (b) action_from_pattern transforms a bare-Semicolon TAP face into
+///     KeyWithModifier(Semicolon, LSHIFT) — every standard tap-resolution arm
+///     (release / flow-tap / timeout) flows through it;
+/// (c) try_predict_final_action gets the same transform (release-prediction
+///     path). The HOLD face is Action::Modifier — unaffected. The L+; quote
+///     combo consumes the key at press (members never resolve) — unaffected.
+fn patch_rmk_colon_native_invert() {
+    const MARKER: &str = "// kobu: colon native inversion applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard/morse.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard/morse.rs; \
+             colon native inversion was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let edits = [
+        // (a) shift-chord press-edge: plain ';' with Shift masked from the report
+        (
+            r#"                        let action = *tap_action;
+                        self.process_key_action_normal(action, event).await;"#,
+            r#"                        // kobu v2 (native inversion): the chord must yield a
+                        // PLAIN Semicolon (';') — mask the held Shift out of
+                        // this one press report (mod-morph-style), then
+                        // restore it for everything that follows.
+                        let action = *tap_action;
+                        let kobu_saved_mods = self.held_modifiers;
+                        self.held_modifiers = rmk_types::modifier::ModifierCombination::from_bits(
+                            kobu_saved_mods.into_bits()
+                                & !((rmk_types::modifier::ModifierCombination::LSHIFT
+                                    | rmk_types::modifier::ModifierCombination::RSHIFT)
+                                    .into_bits()),
+                        );
+                        self.process_key_action_normal(action, event).await;
+                        self.held_modifiers = kobu_saved_mods;"#,
+        ),
+        // (b) standard tap resolutions: bare-Semicolon tap face → ':'
+        (
+            r#"            KeyAction::TapHold(tap_action, hold_action, _) => match pattern {
+                TAP => *tap_action,
+                HOLD => *hold_action,
+                _ => Action::No,
+            },"#,
+            r#"            KeyAction::TapHold(tap_action, hold_action, _) => match pattern {
+                // kobu: native ':' — a bare-Semicolon tap face renders as
+                // Shift+Semicolon (':' on US). The Shift-chord ';' is handled
+                // at the press edge with the shift masked (see the None-arm).
+                TAP => match *tap_action {
+                    Action::Key(rmk_types::keycode::KeyCode::Semicolon) => Action::KeyWithModifier(
+                        rmk_types::keycode::KeyCode::Semicolon,
+                        rmk_types::modifier::ModifierCombination::LSHIFT,
+                    ),
+                    a => a,
+                },
+                HOLD => *hold_action,
+                _ => Action::No,
+            },"#,
+        ),
+        // (c) release-prediction path: same transform
+        (
+            r#"                if pattern_start.last_is_hold() {
+                    Some(*hold_action)
+                } else {
+                    Some(*tap_action)
+                }"#,
+            r#"                if pattern_start.last_is_hold() {
+                    Some(*hold_action)
+                } else {
+                    // kobu: native ':' (see action_from_pattern note)
+                    Some(match *tap_action {
+                        Action::Key(rmk_types::keycode::KeyCode::Semicolon) => Action::KeyWithModifier(
+                            rmk_types::keycode::KeyCode::Semicolon,
+                            rmk_types::modifier::ModifierCombination::LSHIFT,
+                        ),
+                        a => a,
+                    })
+                }"#,
+        ),
+    ];
+    for (from, to) in edits {
+        if !contents.contains(from) {
+            panic!(
+                "kobu: colon-invert anchor missing in rmk-{RMK_VERSION} {} \
+                 (must run AFTER patch_rmk_morse_shift_chord_instant_tap); upstream/patches changed \u{2014} \
+                 update firmware/build.rs::patch_rmk_colon_native_invert",
+                path.display()
+            );
+        }
+        contents = contents.replace(from, to);
+    }
 
     contents.push('\n');
     contents.push_str(MARKER);

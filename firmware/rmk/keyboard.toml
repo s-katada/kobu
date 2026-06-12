@@ -129,7 +129,7 @@ keymap = [
     # Layer 2 — numbers / symbols (ZMK layer2)
     [
         ["Kc1", "Kc2", "Kc3", "Kc4", "Kc5", "Kc6", "Kc7", "Kc8", "Kc9", "Kc0"],
-        ["WM(Kc1, LShift)", "WM(Kc2, LShift)", "WM(Kc3, LShift)", "WM(Kc4, LShift)", "WM(Kc5, LShift)", "Left", "Down", "Up", "Right", "WM(Semicolon, LShift)"],
+        ["WM(Kc1, LShift)", "WM(Kc2, LShift)", "WM(Kc3, LShift)", "WM(Kc4, LShift)", "WM(Kc5, LShift)", "Left", "Down", "Up", "Right", "Semicolon"],
         ["WM(Kc6, LShift)", "WM(Kc7, LShift)", "WM(Kc8, LShift)", "WM(Kc9, LShift)", "WM(Kc0, LShift)", "No", "No", "No", "No", "_"],
         # Layer-2 language thumb = かな/Shift (Language1 = Japanese IME on). The
         # SAME physical thumb on the base layer is 英数 (Language2, Layer 0 col3):
@@ -201,6 +201,16 @@ combos = [
     # exact MT action per layer (layer-0 Mac + layer-1 Win). This exact
     # spelling was user-confirmed working at 7576fe7.
     { actions = ["L", "MT(Semicolon, LGui|LShift, FH)"], output = "Quote" },
+    # かな mid-flow (2026-06-12): during flowing typing, the Space layer-tap
+    # FLOW-TAPS (instantly types the space — the 変換 feel the user loves), so
+    # the Space-hold+かなサム gesture cannot work inside a typing streak. This
+    # combo is the streak-proof alternative: the two ADJACENT left thumbs
+    # (Ctrl + 英数) pressed together → Language1 (かな). Combos are matched
+    # upstream of flow tap, so it works at any typing speed; the ≤50ms combo
+    # park on Ctrl/英数 flushes on the next event or own release (no felt
+    # latency on their solo uses). The Space-hold gesture still works after a
+    # ≥150ms pause, unchanged.
+    { actions = ["LCtrl", "MT(Language2, LShift, FH)"], output = "Language1" },
     { actions = ["L", "MT(Semicolon, LCtrl|LShift, FH)"], output = "Quote" },
     { actions = ["N", "M"], output = "Backspace" },                      # combo_bspc (pos 25,26)
     { actions = ["Comma", "Dot"], output = "Slash" },                    # combo_question (pos 27,28)
@@ -210,13 +220,14 @@ combos = [
     { actions = ["S", "D"], output = "TG(6)", layer = 6 },               # combo_neovim_toggle (pos 11,12, Neovim → back)
 ]
 
-# Fork — stays EMPTY. The `:` ↔ `;` inversion the forks once tried to express
-# lives on the HOST: this Mac runs Karabiner-Elements "Exchange semicolon and
-# colon" (~/.config/karabiner/karabiner.json, enabled, NO device filter, so it
-# applies to kobu too). The firmware therefore emits NORMAL US semantics
-# (tap = plain ';', Shift-chord = Shift+';') and the host rule renders
-# ':' / ';' — exactly like the built-in keyboard. Any firmware-side inversion
-# gets double-inverted (that was eras C and F).
+# Fork — stays EMPTY. The `:` ↔ `;` inversion is now NATIVE to the firmware
+# (2026-06-12 #3): build.rs::patch_rmk_colon_native_invert renders tap = ':'
+# (Shift+Semicolon, atomic) and Shift-chord = ';' (plain Semicolon with the
+# held Shift masked from that one report), resolved at the press edge by
+# patch_rmk_morse_shift_chord_instant_tap. The Mac's Karabiner "Exchange
+# semicolon and colon" rule was device-scoped to EXCLUDE kobu
+# (device_unless vendor 19279 / product 16985 in karabiner.json — backup at
+# karabiner.json.bak-20260612), so kobu now behaves identically on any host.
 # NOTE: forks = [] does NOT make stale Vial-written fork slots unreachable —
 # at boot rmk fill_vec-pads this list to capacity 8 BEFORE read_forks overlays
 # stored slots per index (rmk keymap.rs:49-53,94-96; host/storage.rs:245-265),
@@ -499,7 +510,7 @@ cs = "P0_09"
 [rmk]
 split_peripherals_num = 1
 ble_profiles_num = 4
-combo_max_num = 16
+combo_max_num = 18
 morse_max_num = 6
 macro_space_size = 256
 fork_max_num = 8
