@@ -117,7 +117,7 @@ keymap = [
         # Win/Linux modifiers) still sit at their old columns and so no longer
         # line up with these shifted base-layer thumbs — shift them too if that
         # cross-layer alignment is wanted.
-        ["No", "MT(Backspace, LGui, FH)", "LCtrl", "MT(Language2, LShift, FH)", "Backspace", "Backspace", "MT(Escape, LAlt, FH)", "LT(2, Space, LTP)", "LT(3, Enter, LTP)", "No"],
+        ["No", "LGui", "LCtrl", "MT(Language2, LShift, FH)", "Backspace", "Backspace", "MT(Escape, LAlt, FH)", "LT(2, Space, LTP)", "LT(3, Enter, LTP)", "No"],
     ],
     # Layer 1 — Win/Linux overlay (ZMK layer1)
     [
@@ -237,14 +237,19 @@ combos = [
 forks = []
 
 [behavior.morse]
-# Flow Tap (QMK) — the typing-streak guard: a morse key (Space/Enter LTs, the
-# thumb MTs, …) PRESSED within `prior_idle_time` of the previous key press
-# resolves as an INSTANT TAP, in order. This is what makes a fast roll like
-# "git s" come out as "git s" (previously the rolled Space resolved as a
-# layer-2 HOLD the moment `s` went down → "git@"), and makes Space/英数 taps
-# feel immediate while typing. After ≥150ms of idle the normal hold logic
-# below applies, so deliberate layer/modifier chords are unaffected.
-enable_flow_tap = true
+# Flow Tap — DISABLED (2026-06-12 #3). Its last clients were the modifier MTs
+# (BS/Cmd, Esc/Alt), where it EATS chord intents: typing fast then Cmd+Enter
+# turned the Cmd thumb into an instant Backspace tap ("backspaceしてenter").
+# Every job flow tap once did is now covered better elsewhere: "git s"
+# ordering = balanced LTs + the follower-buffering patch; 変換 Space =
+# release-time tap; kana = press-edge patches. With flow tap off the modifier
+# thumbs are pure hold_on_other_press: press-and-chord = instant Cmd/Alt at
+# ANY typing speed; solo taps emit at release. (Accepted trade-off: rolling
+# THROUGH a modifier thumb mid-word can fire the modifier — these are outer
+# thumbs and the dedicated plain Backspace sits at the 直下 position.)
+# prior_idle_time stays: the kana press-edge patch reads it as its streak
+# window (build.rs::patch_rmk_kana_press_edge).
+enable_flow_tap = false
 prior_idle_time = "150ms"
 hold_on_other_press = true
 hold_timeout = "200ms"
