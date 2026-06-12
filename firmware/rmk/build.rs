@@ -226,6 +226,7 @@ fn main() {
     patch_rmk_colon_mask_own_report();
     patch_rmk_flow_tap_exempt_layer_taps();
     patch_rmk_normal_mode_buffering();
+    patch_rmk_kana_press_edge();
     patch_rmk_clearlayout_resync_vial_tables();
 
     generate_vial_config();
@@ -5649,4 +5650,151 @@ fn patch_rmk_normal_mode_buffering() {
     fs::write(&path, contents).unwrap_or_else(|e| {
         panic!("kobu: failed to write {}: {e}", path.display());
     });
+}
+/// Option B final polish (v6) — kana at the PRESS edge. Balanced still waits
+/// for the thumb's RELEASE twice over: the layer resolves at the follower's
+/// release (permissive hold), and the layer-2 kana key is itself an MT whose
+/// tap emits at release. Two press-edge rules close the last ~60-90ms:
+/// (1) keyboard.rs make_decisions: a LANGUAGE thumb pressed while a
+///     layer-tap is held-undecided is an unambiguous layer intent — fire the
+///     layer hold at the thumb's press (HoldOnOtherKeyPress + CleanBuffer;
+///     the thumb re-fetches on layer 2 and becomes Language1).
+/// (2) keyboard/morse.rs: a Language1 tap-hold pressed inside a typing
+///     streak (within prior_idle_time of the last simple key) emits its tap
+///     at the press edge (PBRNRY parking, same mechanics as the shift-chord
+///     block). Deliberate post-idle presses keep the MT hold — layer-2
+///     Shift (shift+arrows) stays reachable.
+fn patch_rmk_kana_press_edge() {
+    const RMK_VERSION: &str = "0.8.2";
+
+    // (1) keyboard.rs — layer resolves at the language thumb's press
+    {
+        const MARKER: &str = "// kobu: kana layer press-edge applied";
+        let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard.rs") else {
+            println!(
+                "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard.rs; \
+                 kana layer press-edge was not applied"
+            );
+            return;
+        };
+        println!("cargo:rerun-if-changed={}", path.display());
+        let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("kobu: failed to read {}: {e}", path.display());
+        });
+        if !contents.contains(MARKER) {
+            let from = r#"                        // Check morse key mode
+                        match mode {"#;
+            let to = r#"                        // kobu (option B final): a LANGUAGE thumb pressed
+                        // while a layer-tap is held-undecided is an unambiguous
+                        // layer intent — resolve the layer at the thumb's PRESS
+                        // edge instead of waiting for its release (balanced).
+                        if event.pressed
+                            && matches!(held_key.action, KeyAction::TapHold(_, Action::LayerOn(_), _))
+                            && matches!(
+                                key_action,
+                                KeyAction::TapHold(
+                                    Action::Key(KeyCode::Language1 | KeyCode::Language2),
+                                    _,
+                                    _
+                                )
+                            )
+                        {
+                            let _ = decisions.push((held_key.event.pos, HeldKeyDecision::HoldOnOtherKeyPress));
+                            decision_for_current_key = KeyBehaviorDecision::CleanBuffer;
+                            continue;
+                        }
+                        // Check morse key mode
+                        match mode {"#;
+            if !contents.contains(from) {
+                panic!(
+                    "kobu: kana layer press-edge anchor missing in rmk-{RMK_VERSION} {}; \
+                     upstream/patches changed \u{2014} update firmware/build.rs::patch_rmk_kana_press_edge",
+                    path.display()
+                );
+            }
+            contents = contents.replace(from, to);
+            contents.push('\n');
+            contents.push_str(MARKER);
+            contents.push('\n');
+            fs::write(&path, contents).unwrap_or_else(|e| {
+                panic!("kobu: failed to write {}: {e}", path.display());
+            });
+        }
+    }
+
+    // (2) keyboard/morse.rs — Language1 tap at the press edge inside a streak
+    {
+        const MARKER: &str = "// kobu: kana tap press-edge applied";
+        let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard/morse.rs") else {
+            println!(
+                "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard/morse.rs; \
+                 kana tap press-edge was not applied"
+            );
+            return;
+        };
+        println!("cargo:rerun-if-changed={}", path.display());
+        let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("kobu: failed to read {}: {e}", path.display());
+        });
+        if !contents.contains(MARKER) {
+            let from = r#"                        return;
+                    }
+                }
+            }
+            match self.held_buffer.find_pos_mut(event.pos) {"#;
+            let to = r#"                        return;
+                    }
+                }
+            }
+            // kobu (option B final): Language1 (kana) pressed inside a typing
+            // streak emits its tap at the PRESS edge — the kana switch fires
+            // the moment the thumb goes down. Deliberate post-idle presses
+            // keep the MT hold (layer-2 Shift stays reachable).
+            {
+                let kobu_is_kana = if let KeyAction::TapHold(tap_action, _, _) = key_action {
+                    matches!(*tap_action, Action::Key(rmk_types::keycode::KeyCode::Language1))
+                } else {
+                    false
+                };
+                if kobu_is_kana
+                    && self.last_press_time.elapsed()
+                        < self.keymap.borrow().behavior.morse.prior_idle_time
+                {
+                    let kobu_state_ok = match self.held_buffer.find_pos_mut(event.pos) {
+                        None => true,
+                        Some(k) => matches!(k.state, KeyState::WaitingCombo),
+                    };
+                    if kobu_state_ok {
+                        let _ = self.held_buffer.remove_if(|kk| kk.event.pos == event.pos);
+                        let action = Action::Key(rmk_types::keycode::KeyCode::Language1);
+                        self.process_key_action_normal(action, event).await;
+                        self.held_buffer.push(HeldKey::new(
+                            event,
+                            *key_action,
+                            KeyState::ProcessedButReleaseNotReportedYet(action),
+                            pressed_time,
+                            timeout_time,
+                        ));
+                        return;
+                    }
+                }
+            }
+            match self.held_buffer.find_pos_mut(event.pos) {"#;
+            if !contents.contains(from) {
+                panic!(
+                    "kobu: kana tap press-edge anchor missing in rmk-{RMK_VERSION} {} \
+                     (must run AFTER patch_rmk_flow_tapped_space_language_rescue); upstream/patches \
+                     changed \u{2014} update firmware/build.rs::patch_rmk_kana_press_edge",
+                    path.display()
+                );
+            }
+            contents = contents.replace(from, to);
+            contents.push('\n');
+            contents.push_str(MARKER);
+            contents.push('\n');
+            fs::write(&path, contents).unwrap_or_else(|e| {
+                panic!("kobu: failed to write {}: {e}", path.display());
+            });
+        }
+    }
 }
