@@ -201,16 +201,11 @@ combos = [
     # exact MT action per layer (layer-0 Mac + layer-1 Win). This exact
     # spelling was user-confirmed working at 7576fe7.
     { actions = ["L", "MT(Semicolon, LGui|LShift, FH)"], output = "Quote" },
-    # かな mid-flow (2026-06-12): during flowing typing, the Space layer-tap
-    # FLOW-TAPS (instantly types the space — the 変換 feel the user loves), so
-    # the Space-hold+かなサム gesture cannot work inside a typing streak. This
-    # combo is the streak-proof alternative: the two ADJACENT left thumbs
-    # (Ctrl + 英数) pressed together → Language1 (かな). Combos are matched
-    # upstream of flow tap, so it works at any typing speed; the ≤50ms combo
-    # park on Ctrl/英数 flushes on the next event or own release (no felt
-    # latency on their solo uses). The Space-hold gesture still works after a
-    # ≥150ms pause, unchanged.
-    { actions = ["LCtrl", "MT(Language2, LShift, FH)"], output = "Language1" },
+    # (2026-06-12 #2) The Ctrl+英数 kana combo was REMOVED: the flow-tapped-
+    # space language rescue (build.rs::patch_rmk_flow_tapped_space_language_
+    # rescue) makes the natural Space+英数サム gesture work mid-streak, and
+    # combo-parking the 英数 thumb delayed that rescue by up to 50ms (the
+    # Backspace landed on the NEXT keypress instead of at the thumb).
     { actions = ["L", "MT(Semicolon, LCtrl|LShift, FH)"], output = "Quote" },
     { actions = ["N", "M"], output = "Backspace" },                      # combo_bspc (pos 25,26)
     { actions = ["Comma", "Dot"], output = "Slash" },                    # combo_question (pos 27,28)

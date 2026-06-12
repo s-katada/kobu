@@ -223,6 +223,7 @@ fn main() {
     patch_rmk_colon_native_invert();
     patch_rmk_colon_chord_combo_aware();
     patch_rmk_flow_tapped_space_language_rescue();
+    patch_rmk_colon_mask_own_report();
     patch_rmk_clearlayout_resync_vial_tables();
 
     generate_vial_config();
@@ -5457,6 +5458,64 @@ fn patch_rmk_flow_tapped_space_language_rescue() {
             "kobu: language-rescue anchor missing in rmk-{RMK_VERSION} {} \
              (must run AFTER patch_rmk_colon_chord_combo_aware); upstream/patches changed \u{2014} \
              update firmware/build.rs::patch_rmk_flow_tapped_space_language_rescue",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+/// :/; v5 — the Shift mask must land in its OWN hid report BEFORE the
+/// semicolon report. EventViewer (post-grab) showed `semicolon down` carrying
+/// the left_shift flag with NO preceding shift-up event: when the modifier
+/// drop and the keydown share one report, the host/Karabiner event-izer can
+/// process the keydown before the modifier change — the mask becomes a
+/// coin-flip (the pre-grab ';' success was lucky raw-HID ordering). Fix: emit
+/// an explicit modifier-only report (shift already masked, no new key) and
+/// only then the semicolon press report; restore held_modifiers silently
+/// afterwards (the next natural report re-carries Shift, which is harmless
+/// after the keydown has been committed).
+fn patch_rmk_colon_mask_own_report() {
+    const MARKER: &str = "// kobu: colon mask own-report (v5) applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard/morse.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard/morse.rs; \
+             colon mask own-report patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"                                    .into_bits()),
+                        );
+                        self.process_key_action_normal(action, event).await;
+                        self.held_modifiers = kobu_saved_mods;"#;
+    let to = r#"                                    .into_bits()),
+                        );
+                        // kobu v5: ship the shift-drop as its OWN report first —
+                        // sharing one report with the keydown lets hosts process
+                        // the keydown before the modifier change (observed ':').
+                        self.send_keyboard_report_with_resolved_modifiers(true).await;
+                        self.process_key_action_normal(action, event).await;
+                        self.held_modifiers = kobu_saved_mods;"#;
+    if !contents.contains(from) {
+        panic!(
+            "kobu: v5 anchor missing in rmk-{RMK_VERSION} {} \
+             (must run AFTER patch_rmk_colon_chord_combo_aware); upstream/patches changed \u{2014} \
+             update firmware/build.rs::patch_rmk_colon_mask_own_report",
             path.display()
         );
     }
