@@ -117,14 +117,14 @@ keymap = [
         # Win/Linux modifiers) still sit at their old columns and so no longer
         # line up with these shifted base-layer thumbs — shift them too if that
         # cross-layer alignment is wanted.
-        ["No", "MT(Backspace, LGui, FH)", "LCtrl", "MT(Language2, LShift, FH)", "Backspace", "Backspace", "MT(Escape, LAlt, FH)", "LT(2, Space, FH)", "LT(3, Enter, FH)", "No"],
+        ["No", "MT(Backspace, LGui, FH)", "LCtrl", "MT(Language2, LShift, FH)", "Backspace", "Backspace", "MT(Escape, LAlt, FH)", "LT(2, Space, LTP)", "LT(3, Enter, LTP)", "No"],
     ],
     # Layer 1 — Win/Linux overlay (ZMK layer1)
     [
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Semicolon, LCtrl|LShift, FH)"],
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Slash, LCtrl|LAlt, FH)"],
-        ["_", "_", "MT(Backspace, LAlt, FH)", "LT(5, LGui, FH)", "_", "MT(Escape, LGui, FH)", "_", "_", "_", "_"],
+        ["_", "_", "MT(Backspace, LAlt, FH)", "LT(5, LGui, LTP)", "_", "MT(Escape, LGui, FH)", "_", "_", "_", "_"],
     ],
     # Layer 2 — numbers / symbols (ZMK layer2)
     [
@@ -321,6 +321,17 @@ morses = [
 #     for layers/modifiers — the "ホールド時間が長い" fix)
 #   * solo deliberate hold                     → 250ms (IME-変換 miss guard)
 FH = { hold_on_other_press = true, hold_timeout = "250ms", gap_timeout = "200ms" }
+# Option B (2026-06-12, user-picked): the layer-taps (Space/Enter/layer1-LGui)
+# move to KobitoKey-parity tap-preferred — hold ONLY via the 200ms timeout
+# (ZMK &lt semantics). Flow tap no longer applies to LTs
+# (build.rs::patch_rmk_flow_tap_exempt_layer_taps), and normal-mode followers
+# are BUFFERED for ordered output (build.rs::patch_rmk_normal_mode_buffering;
+# rmk otherwise emits the follower immediately and the deferred tap lands
+# after it — the parity-era "gits " bug). Net feel: 変換 Space emits at
+# RELEASE (KobitoKey feel, +50-80ms vs flow tap), Space+英数 mid-stream works
+# cleanly via the 200ms hold (no space typed, no Backspace rescue flicker),
+# numbers/layer chords engage after 200ms of deliberate hold.
+LTP = { normal_mode = true, hold_timeout = "200ms", gap_timeout = "200ms" }
 
 [[behavior.macro.macros]]
 operations = [

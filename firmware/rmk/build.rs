@@ -224,6 +224,8 @@ fn main() {
     patch_rmk_colon_chord_combo_aware();
     patch_rmk_flow_tapped_space_language_rescue();
     patch_rmk_colon_mask_own_report();
+    patch_rmk_flow_tap_exempt_layer_taps();
+    patch_rmk_normal_mode_buffering();
     patch_rmk_clearlayout_resync_vial_tables();
 
     generate_vial_config();
@@ -5516,6 +5518,126 @@ fn patch_rmk_colon_mask_own_report() {
             "kobu: v5 anchor missing in rmk-{RMK_VERSION} {} \
              (must run AFTER patch_rmk_colon_chord_combo_aware); upstream/patches changed \u{2014} \
              update firmware/build.rs::patch_rmk_colon_mask_own_report",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+/// Option B (part 1/2) — exempt LAYER-TAPS from flow tap. With the LTs moving
+/// to tap-preferred (LTP profile), flow tap must not instant-tap a mid-stream
+/// Space anymore: the press stays undecided so Space-hold+かなサム can resolve
+/// as the layer hold (KobitoKey semantics). MTs (Backspace/Cmd, Esc/Alt) keep
+/// flow tap — it protects their typing rolls from instant-modifier 誤爆.
+/// Language thumbs stay exempt via the earlier patch. Held-side force-tap
+/// (part 2 of the language patch) intentionally still applies to LTs: when a
+/// FOLLOWING morse key flow-taps, force-tapping the held Space keeps output
+/// ordered.
+fn patch_rmk_flow_tap_exempt_layer_taps() {
+    const MARKER: &str = "// kobu: flow-tap layer-tap exemption applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard.rs; \
+             flow-tap layer-tap exemption was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"            && !matches!(
+                key_action,
+                KeyAction::TapHold(Action::Key(KeyCode::Language1 | KeyCode::Language2), _, _)
+            )"#;
+    let to = r#"            && !matches!(
+                key_action,
+                KeyAction::TapHold(Action::Key(KeyCode::Language1 | KeyCode::Language2), _, _)
+                    // kobu (option B): layer-taps are tap-preferred now — a
+                    // mid-stream Space must stay undecided so Space+かなサム
+                    // can resolve as the layer hold (KobitoKey semantics).
+                    | KeyAction::TapHold(_, Action::LayerOn(_), _)
+            )"#;
+    if !contents.contains(from) {
+        panic!(
+            "kobu: layer-tap exemption anchor missing in rmk-{RMK_VERSION} {} \
+             (must run AFTER patch_rmk_flow_tap_exempt_language); upstream/patches changed \u{2014} \
+             update firmware/build.rs::patch_rmk_flow_tap_exempt_layer_taps",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Option B (part 2/2) — ZMK-tap-preferred parity: BUFFER keys pressed while a
+/// normal-mode morse key is undecided. rmk's normal mode emits the follower
+/// immediately and the deferred tap lands after it — the parity-era
+/// "git s" → "gits " bug. ZMK queues the input until the hold-tap decides;
+/// add the same: the follower parks (Buffer decision), the morse key resolves
+/// first (tap at its release → ordered replay; hold at the 200ms timeout →
+/// the follower replays ON the layer — which is exactly the Space+かなサム
+/// gesture). Only the LTP profile uses normal mode on kobu, so the blast
+/// radius is the layer-taps.
+fn patch_rmk_normal_mode_buffering() {
+    const MARKER: &str = "// kobu: normal-mode follower buffering applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard.rs; \
+             normal-mode buffering was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"                            MorseMode::PermissiveHold => {
+                                // Permissive hold mode checks key releases, so push current key press into buffer.
+                                decision_for_current_key = KeyBehaviorDecision::Buffer;
+                            }"#;
+    let to = r#"                            MorseMode::PermissiveHold => {
+                                // Permissive hold mode checks key releases, so push current key press into buffer.
+                                decision_for_current_key = KeyBehaviorDecision::Buffer;
+                            }
+                            // kobu (option B): normal mode buffers followers
+                            // too — ZMK tap-preferred parity. Without this the
+                            // follower emits immediately and the deferred tap
+                            // lands after it ("git s" -> "gits "). The morse
+                            // key resolves first (tap at release / hold at
+                            // timeout), then the buffered follower replays in
+                            // order — on the layer if the hold won.
+                            MorseMode::Normal => {
+                                decision_for_current_key = KeyBehaviorDecision::Buffer;
+                            }"#;
+    if !contents.contains(from) {
+        panic!(
+            "kobu: normal-mode buffering anchor missing in rmk-{RMK_VERSION} {}; \
+             upstream/patches changed \u{2014} update firmware/build.rs::patch_rmk_normal_mode_buffering",
             path.display()
         );
     }
