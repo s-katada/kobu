@@ -227,6 +227,7 @@ fn main() {
     patch_rmk_flow_tap_exempt_layer_taps();
     patch_rmk_normal_mode_buffering();
     patch_rmk_kana_press_edge();
+    patch_rmk_enter_chord_press_edge();
     patch_rmk_clearlayout_resync_vial_tables();
 
     generate_vial_config();
@@ -5797,4 +5798,97 @@ fn patch_rmk_kana_press_edge() {
             });
         }
     }
+}
+/// Cmd+Enter fix (v7) — ENTER chord press-edge. The Enter LT is balanced, so
+/// its TAP resolves at RELEASE with that instant's modifiers; in a fast
+/// Cmd+Enter the user releases Cmd first and the send-chord degraded to a
+/// plain Enter (HW-isolated: holding Cmd consciously to the end made it
+/// work). A real keyboard commits the chord at the keydown. Rule: an Enter
+/// layer-tap pressed while ANY modifier is held (held_modifiers covers both
+/// MT holds and the plain LGui thumb via register_modifier_key) is an
+/// unambiguous chord — emit the Enter tap at the PRESS edge (PBRNRY parking,
+/// same mechanics as the shift-chord/kana blocks). Modifier-free presses keep
+/// the full balanced behavior (layer-3 hold reachable). Space is deliberately
+/// NOT included: modifier+Space-hold+digit chords (e.g. Cmd+1 tab nav via
+/// layer 2) must keep the layer path, and a press-edge Space would fire
+/// Cmd+Space (Spotlight).
+fn patch_rmk_enter_chord_press_edge() {
+    const MARKER: &str = "// kobu: enter chord press-edge applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard/morse.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard/morse.rs; \
+             enter chord press-edge was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"                        return;
+                    }
+                }
+            }
+            match self.held_buffer.find_pos_mut(event.pos) {"#;
+    let to = r#"                        return;
+                    }
+                }
+            }
+            // kobu (v7): an ENTER layer-tap pressed while ANY modifier is held
+            // is a chord (Cmd+Enter send / Shift+Enter newline) — commit the
+            // tap at the PRESS edge so the modifier cannot escape before the
+            // release (balanced resolves taps at release; fast chords release
+            // Cmd first). Modifier-free presses keep balanced (layer-3 hold).
+            {
+                let kobu_is_enter_lt = matches!(
+                    key_action,
+                    KeyAction::TapHold(
+                        Action::Key(rmk_types::keycode::KeyCode::Enter),
+                        Action::LayerOn(_),
+                        _
+                    )
+                );
+                if kobu_is_enter_lt && self.held_modifiers.into_bits() != 0 {
+                    let kobu_state_ok = match self.held_buffer.find_pos_mut(event.pos) {
+                        None => true,
+                        Some(k) => matches!(k.state, KeyState::WaitingCombo),
+                    };
+                    if kobu_state_ok {
+                        let _ = self.held_buffer.remove_if(|kk| kk.event.pos == event.pos);
+                        let action = Action::Key(rmk_types::keycode::KeyCode::Enter);
+                        self.process_key_action_normal(action, event).await;
+                        self.held_buffer.push(HeldKey::new(
+                            event,
+                            *key_action,
+                            KeyState::ProcessedButReleaseNotReportedYet(action),
+                            pressed_time,
+                            timeout_time,
+                        ));
+                        return;
+                    }
+                }
+            }
+            match self.held_buffer.find_pos_mut(event.pos) {"#;
+    if !contents.contains(from) {
+        panic!(
+            "kobu: enter press-edge anchor missing in rmk-{RMK_VERSION} {} \
+             (must run AFTER patch_rmk_kana_press_edge); upstream/patches changed \u{2014} \
+             update firmware/build.rs::patch_rmk_enter_chord_press_edge",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
 }
