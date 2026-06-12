@@ -331,7 +331,17 @@ FH = { hold_on_other_press = true, hold_timeout = "250ms", gap_timeout = "200ms"
 # RELEASE (KobitoKey feel, +50-80ms vs flow tap), Space+英数 mid-stream works
 # cleanly via the 200ms hold (no space typed, no Backspace rescue flicker),
 # numbers/layer chords engage after 200ms of deliberate hold.
-LTP = { normal_mode = true, hold_timeout = "200ms", gap_timeout = "200ms" }
+# 2026-06-12 #2: normal_mode (pure tap-preferred) made the kana switch wait
+# the full 200ms timeout — 「鬼遅い」. Balanced (permissive_hold) resolves the
+# hold the moment the FOLLOWER is pressed AND RELEASED while Space is held:
+# the Space+かなサム gesture (and Space+number chords) confirm at the
+# follower's own release ≈ instant, tracking the finger instead of a timer.
+# Solo taps still emit at release; rolls that release Space first still tap
+# (followers stay buffered & ordered). Residual trade-off (standard for ZMK
+# balanced): a follower pressed AND released entirely within a held Space
+# resolves the layer — a fully-nested ultra-fast roll could fire layer-2
+# (e.g. "@" instead of "s"); if that ever bites, drop hold_timeout instead.
+LTP = { permissive_hold = true, hold_timeout = "200ms", gap_timeout = "200ms" }
 
 [[behavior.macro.macros]]
 operations = [
