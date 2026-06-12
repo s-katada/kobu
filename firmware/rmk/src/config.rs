@@ -27,9 +27,10 @@ use core::sync::atomic::Ordering;
 use embassy_nrf::pac;
 use embassy_time::Duration;
 use rmk::input_device::battery::{
-    KOBU_HOST_CONN_INTERVAL_US, KOBU_HOST_CONNECTED, KOBU_LAST_KEY_TICKS, KOBU_MOUSE_BUTTONS,
-    KOBU_SCROLL_INVERT_X, KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_THROTTLE_MS, KOBU_STATUS_LED_BAT_HIGH,
-    KOBU_STATUS_LED_BAT_LOW, KOBU_STATUS_LED_PURPLE_HOLD_MS, KOBU_TRACKBALL_CPI,
+    KOBU_HOST_CONN_INTERVAL_US, KOBU_HOST_CONNECTED, KOBU_LAST_KEY_TICKS, KOBU_LAST_TYPING_TICKS,
+    KOBU_MOUSE_BUTTONS, KOBU_SCROLL_INVERT_X, KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_THROTTLE_MS,
+    KOBU_STATUS_LED_BAT_HIGH, KOBU_STATUS_LED_BAT_LOW, KOBU_STATUS_LED_PURPLE_HOLD_MS,
+    KOBU_TRACKBALL_CPI,
 };
 
 /// Ordering used for all reads / writes here. `Relaxed` is correct
@@ -115,6 +116,19 @@ pub fn trackball_cpi() -> u16 {
 /// false-trigger the mouse layer. Returns 0 until the first key is pressed.
 pub fn last_key_ticks() -> u32 {
     KOBU_LAST_KEY_TICKS.load(ORD)
+}
+
+/// embassy-time tick (32768 Hz base, low 32 bits) of the most recent TYPING key
+/// press: a press that resolved through a *transparent* slot of the auto-mouse
+/// layer to a lower layer and is not a bare modifier (stamped by the patched
+/// `KeyMap::get_action_with_layer_cache`, see `build.rs::patch_rmk_typing_tick`;
+/// stamps only while the auto-mouse layer is active). Read by
+/// `trackball.rs::run_auto_mouse_layer`'s hold loop to drop the mouse layer the
+/// instant the user resumes typing — mouse buttons and the layer-4 mousing
+/// chords (Cmd+C/V, Tab…) resolve AT layer 4 and never stamp. Returns 0 until
+/// the first such press.
+pub fn last_typing_ticks() -> u32 {
+    KOBU_LAST_TYPING_TICKS.load(ORD)
 }
 
 /// True once the HOST (Mac) BLE link is encrypted, false on disconnect. Set

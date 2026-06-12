@@ -229,6 +229,17 @@ fn main() {
     patch_rmk_kana_press_edge();
     patch_rmk_enter_chord_press_edge();
     patch_rmk_clearlayout_resync_vial_tables();
+    // クリック救済 (2026-06-12) — "ほぼ静止しないとクリックできない / 微調整中に
+    // レイヤーが切れる". Inject KOBU_LAST_TYPING_TICKS + KOBU_AUTO_MOUSE_LAYER
+    // and stamp the typing tick in KeyMap::get_action_with_layer_cache when a
+    // press falls THROUGH a transparent auto-mouse-layer slot (and isn't a bare
+    // modifier) — i.e. the user resumed typing while mousing. The firmware hold
+    // loop (src/trackball.rs) polls it to drop layer 4 instantly, which is what
+    // lets the idle timeout be a click-friendly 600 ms. Statics anchor on the
+    // KOBU_MOUSE_BUTTONS line (injected by patch_rmk_kobu_wedge_drag_atomics →
+    // must run after it); the keymap.rs anchor is pristine text. NEW registry
+    // patch ⇒ one `cargo clean --release -p rmk` before the next build.
+    patch_rmk_typing_tick();
 
     generate_vial_config();
 
@@ -5887,6 +5898,152 @@ fn patch_rmk_enter_chord_press_edge() {
 
     contents.push('\n');
     contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// クリック救済 (2026-06-12): typing-resume detector for the auto-mouse layer.
+///
+/// Two injections:
+///
+/// 1. `input_device/battery.rs`: two new atomics —
+///    * `KOBU_LAST_TYPING_TICKS` (u32): embassy tick of the most recent
+///      TYPING key press (definition below).
+///    * `KOBU_AUTO_MOUSE_LAYER` (u8): which layer is the auto-mouse layer.
+///      255 = disabled; `run_auto_mouse_layer` (src/trackball.rs) stores 4 at
+///      startup. Keeps the layer index out of the registry patch so a keymap
+///      reshuffle only touches firmware code.
+///
+/// 2. `keymap.rs::get_action_with_layer_cache` (key branch, press path): when a
+///    press resolves by falling THROUGH the auto-mouse layer (the layer is
+///    active but the winning action came from a different layer via a
+///    Transparent slot) and the action is not a bare modifier
+///    (`Single(Key(modifier))`), stamp `KOBU_LAST_TYPING_TICKS`. That press is
+///    the user RESUMING TYPING while the mouse layer is up; the firmware hold
+///    loop polls the stamp and deactivates layer 4 within ~25 ms, so the idle
+///    timeout can be a click-friendly 600 ms with zero mousing→typing linger.
+///
+///    What deliberately does NOT stamp:
+///    * keys DEFINED on layer 4 — MouseBtn1/2/3 and the mousing chords
+///      (Cmd+C/V, Tab, held-LGui, bracket tabs): they resolve AT the layer
+///      (`layer_idx == auto-mouse layer`), so clicking / copy-paste / app-
+///      switching while mousing never kills the layer;
+///    * bare modifiers anywhere (Shift/Cmd/Ctrl…): pressing Cmd in
+///      preparation for a Cmd+click must not kill the layer either;
+///    * encoder events (different branch, irrelevant to typing).
+fn patch_rmk_typing_tick() {
+    const RMK_VERSION: &str = "0.8.2";
+
+    // ── 1. statics into input_device/battery.rs ─────────────────────────
+    const STATICS_MARKER: &str = "// kobu: typing-tick + auto-mouse-layer statics applied";
+    let Some(bat_path) = find_rmk_file(RMK_VERSION, "src/input_device/battery.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} input_device/battery.rs; typing-tick statics not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", bat_path.display());
+    let mut contents = fs::read_to_string(&bat_path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", bat_path.display());
+    });
+    if !contents.contains(STATICS_MARKER) {
+        let anchor = "pub static KOBU_MOUSE_BUTTONS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);";
+        if !contents.contains(anchor) {
+            panic!(
+                "kobu: expected KOBU_MOUSE_BUTTONS anchor in rmk-{RMK_VERSION} input_device/battery.rs at {}; \
+                 patch_rmk_kobu_wedge_drag_atomics must run first — \
+                 update firmware/build.rs::patch_rmk_typing_tick",
+                bat_path.display()
+            );
+        }
+        let injected = "pub static KOBU_MOUSE_BUTTONS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);\n\n\
+// kobu (クリック救済): embassy-time tick (low 32 bits) of the most recent TYPING\n\
+// key press — a press that resolved through a *transparent* slot of the active\n\
+// auto-mouse layer to a lower layer and is not a bare modifier. Stamped by the\n\
+// patched KeyMap::get_action_with_layer_cache (see build.rs::patch_rmk_typing_\n\
+// tick); read by firmware/src/trackball.rs::run_auto_mouse_layer to drop the\n\
+// auto-mouse layer the instant the user resumes typing.\n\
+pub static KOBU_LAST_TYPING_TICKS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);\n\n\
+// kobu (クリック救済): index of the auto-mouse layer, 255 = none/disabled. Set\n\
+// once by run_auto_mouse_layer at startup (currently 4). Read by the patched\n\
+// get_action_with_layer_cache to decide which layer's transparent fallthroughs\n\
+// count as \"typing resumed\".\n\
+pub static KOBU_AUTO_MOUSE_LAYER: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(255);";
+        contents = contents.replace(anchor, injected);
+        contents.push('\n');
+        contents.push_str(STATICS_MARKER);
+        contents.push('\n');
+        fs::write(&bat_path, contents).unwrap_or_else(|e| {
+            panic!("kobu: failed to write {}: {e}", bat_path.display());
+        });
+    }
+
+    // ── 2. the stamp in keymap.rs ───────────────────────────────────────
+    const STAMP_MARKER: &str = "// kobu: typing-tick stamp in get_action_with_layer_cache applied";
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keymap.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keymap.rs; typing-tick stamp not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(STAMP_MARKER) {
+        return;
+    }
+
+    let from = r#"                        // Found a valid action in the layer, cache it
+                        self.save_layer_cache(event.pos, layer_idx as u8);
+
+                        return action;"#;
+    let to = r#"                        // Found a valid action in the layer, cache it
+                        self.save_layer_cache(event.pos, layer_idx as u8);
+
+                        // kobu (クリック救済): if the auto-mouse layer is active
+                        // and this PRESS resolved on a DIFFERENT layer (i.e. it
+                        // fell through a Transparent auto-mouse slot) and it is
+                        // not a bare modifier, the user is resuming TYPING —
+                        // stamp the tick so the firmware auto-mouse hold loop
+                        // (firmware/src/trackball.rs) drops the layer at once.
+                        // Mouse buttons / mousing chords resolve AT the auto-
+                        // mouse layer and bare modifiers (Shift/Cmd before a
+                        // chord-click) are exempt, so neither kills the layer.
+                        {
+                            let kobu_aml = crate::input_device::battery::KOBU_AUTO_MOUSE_LAYER
+                                .load(core::sync::atomic::Ordering::Relaxed) as usize;
+                            let kobu_bare_modifier = matches!(
+                                action,
+                                KeyAction::Single(rmk_types::action::Action::Key(k)) if k.is_modifier()
+                            );
+                            if kobu_aml < self.layer_state.len()
+                                && self.layer_state[kobu_aml]
+                                && layer_idx != kobu_aml
+                                && !kobu_bare_modifier
+                            {
+                                crate::input_device::battery::KOBU_LAST_TYPING_TICKS.store(
+                                    embassy_time::Instant::now().as_ticks() as u32,
+                                    core::sync::atomic::Ordering::Relaxed,
+                                );
+                            }
+                        }
+
+                        return action;"#;
+
+    if !contents.contains(from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} keymap.rs get_action_with_layer_cache key-branch block missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_typing_tick",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(STAMP_MARKER);
     contents.push('\n');
     fs::write(&path, contents).unwrap_or_else(|e| {
         panic!("kobu: failed to write {}: {e}", path.display());
