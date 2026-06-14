@@ -116,12 +116,23 @@ type Phase =
   | { kind: 'error'; message: string; resumeStage: Stage };
 
 /**
- * How long to wait for the OS to surface the XIAO-BOOT mass-storage
+ * Max time to wait for the OS to surface the XIAO-BOOT mass-storage
  * volume after BootloaderJump. The XIAO BLE typically reboots and
- * enumerates within ~1.5 s; 3 s gives the file picker something to
- * latch onto without making the user stare at a spinner.
+ * enumerates within ~1.5 s, but USB re-enumeration (especially on
+ * macOS) is routinely slower than that, so we POLL for the volume up
+ * to this ceiling and continue the instant it appears. The previous
+ * single fixed-delay probe raced the mount and frequently bounced the
+ * user to the manual picker before XIAO-BOOT was ready. Tests pass
+ * `mountWaitMs={0}` to skip the real-time wait.
  */
-const MOUNT_WAIT_MS = 3000;
+const MOUNT_WAIT_MS = 8000;
+
+/** How often to re-probe for the XIAO-BOOT volume while waiting. */
+const MOUNT_POLL_INTERVAL_MS = 250;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export function InstallButton({
   label,
@@ -169,19 +180,33 @@ export function InstallButton({
   };
 
   /**
-   * Probe a saved directory handle. Returns the handle if the user's
-   * still-granted permission AND the volume is currently mounted —
-   * suitable for skipping the directory picker entirely. Returns
-   * null when the saved handle can't be used silently (permission
-   * decayed, volume not mounted, no saved handle).
+   * After the bootloader jump, wait for a *saved* XIAO-BOOT handle to
+   * become writable AND mounted, so we can skip the directory picker
+   * entirely. Returns the handle once usable, or null when it can't be
+   * reused silently (permission decayed, no saved handle) or the volume
+   * never showed up within `mountWaitMs`.
+   *
+   * We POLL rather than probe once: the OS takes a variable amount of
+   * time to re-enumerate the XIAO-BOOT mass-storage volume after the
+   * jump, so a single check races the mount. First-time installs have
+   * no saved handle to poll for, so they return promptly (after a short
+   * grace period) and fall through to the manual picker.
    */
-  const trySavedHandle = async (): Promise<FileSystemDirectoryHandle | null> => {
+  const waitForMountedSavedHandle = async (): Promise<FileSystemDirectoryHandle | null> => {
     const saved = await loadXiaoBootHandle();
-    if (!saved) return null;
-    const perm = await queryHandlePermission(saved);
-    if (perm !== 'granted') return null;
-    if (!(await isHandleAccessible(saved))) return null;
-    return saved;
+    if (!saved) {
+      // Nothing to reuse — give the OS a brief beat to surface XIAO-BOOT
+      // before handing off to the manual picker, then bail.
+      if (mountWaitMs > 0) await sleep(Math.min(mountWaitMs, 800));
+      return null;
+    }
+    if ((await queryHandlePermission(saved)) !== 'granted') return null;
+    const deadline = Date.now() + mountWaitMs;
+    for (;;) {
+      if (await isHandleAccessible(saved)) return saved;
+      if (Date.now() >= deadline) return null;
+      await sleep(MOUNT_POLL_INTERVAL_MS);
+    }
   };
 
   const startWizard = () => {
@@ -209,24 +234,37 @@ export function InstallButton({
 
   /**
    * Auto-jump pipeline: send Vial BootloaderJump → wait for OS mount
-   * → try saved handle, falling back to a "pick XIAO-BOOT" step.
+   * → reuse a saved handle, falling back to a "pick XIAO-BOOT" step.
+   *
+   * The whole body is guarded: a bootloader-jump that throws an
+   * unexpected error (a stale/half-open transport, or a Vial command
+   * racing ours and tripping the single-slot mailbox) must NOT strand
+   * the wizard on the "切り替え中…" spinner forever. Any failure lands
+   * on the error screen with a retry button instead.
    */
   const runAutoJumpFlow = async (stage: Stage, transport: WebHidTransport) => {
-    setPhase({ kind: 'jumping-to-bootloader', stage });
-    await jumpToBootloader(transport);
-    setPhase({ kind: 'waiting-for-mount', stage });
-    if (mountWaitMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, mountWaitMs));
+    try {
+      setPhase({ kind: 'jumping-to-bootloader', stage });
+      await jumpToBootloader(transport);
+      setPhase({ kind: 'waiting-for-mount', stage });
+      const saved = await waitForMountedSavedHandle();
+      if (saved) {
+        // Silent re-use — no picker needed. The verify step also
+        // re-confirms accessibility so we never hand stale handles to
+        // writeUf2().
+        await runFromHandle(stage, saved, 'auto-jumped');
+        return;
+      }
+      setPhase({ kind: 'ready-to-pick', stage, reason: 'auto-jumped' });
+    } catch (err) {
+      setPhase({
+        kind: 'error',
+        message: `ブートローダーモードへの切り替えに失敗しました: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        resumeStage: stage,
+      });
     }
-    const saved = await trySavedHandle();
-    if (saved) {
-      // Silent re-use — no picker needed. The verify step also
-      // re-confirms accessibility so we never hand stale handles to
-      // writeUf2().
-      await runFromHandle(stage, saved, 'auto-jumped');
-      return;
-    }
-    setPhase({ kind: 'ready-to-pick', stage, reason: 'auto-jumped' });
   };
 
   /**

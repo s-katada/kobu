@@ -466,6 +466,32 @@ describe('InstallButton — auto bootloader-jump (central, connected)', () => {
     await waitFor(() => expect(screen.getByText(/書き込みが完了しました/)).toBeInTheDocument());
     expect(writes).toHaveLength(1);
   });
+
+  it('surfaces a retryable error (not a stuck spinner) when the bootloader jump throws unexpectedly', async () => {
+    // enterBootloader only swallows receive-timeout / send-failed /
+    // disconnected. Anything else (here: concurrent-request, which the
+    // single-slot mailbox throws if a Vial command races ours) must
+    // land on the error screen with a retry — never freeze the wizard
+    // on the "切り替え中…" spinner.
+    const failing = {
+      sendAndReceive: vi.fn(async () => {
+        const { TransportError } = await import('../transport/types');
+        throw new TransportError('concurrent-request', 'another command in flight');
+      }),
+    } as unknown as WebHidTransport;
+    readyConnection(failing);
+
+    render(<InstallButton label="セントラル" target="central" asset={ASSET} mountWaitMs={0} />);
+    await userEvent.click(screen.getByRole('button', { name: /セントラルをインストール/ }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/ブートローダーモードへの切り替えに失敗しました/),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('button', { name: 'やり直す' })).toBeInTheDocument();
+    expect(screen.queryByText(/ブートローダーモードに切り替え中/)).not.toBeInTheDocument();
+  });
 });
 
 describe('InstallButton — auto-jump gate (negative cases)', () => {
