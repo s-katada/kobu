@@ -6,7 +6,14 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    "not_found_handling": "single-page-application"
+    "not_found_handling": "single-page-application",
+    // Run the Worker for every request (it falls through to
+    // `env.ASSETS.fetch` for asset paths). Without this, Cloudflare
+    // serves the SPA entry documents (`/`, `/assets/*`, `/zmk/`)
+    // straight from the asset server, bypassing `fetch` →
+    // `withSecurityHeaders`, so the CSP + Permissions-Policy never
+    // reached the documents that actually need them.
+    "run_worker_first": true
   },
   "observability": {
     "enabled": true
