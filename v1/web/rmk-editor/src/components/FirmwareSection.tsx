@@ -81,7 +81,7 @@ function ReleaseCard({ release }: { release: FirmwareRelease }) {
   // (central/peripheral + factory-reset). The ZMK build that the same
   // `firmware-latest` release also carries (kobu-zmk-left/right/reset.uf2) is
   // deliberately NOT offered here: ZMK is flashed + configured from the
-  // separate ZMK editor (web/zmk-editor, ZMK Studio), and installing it from
+  // separate ZMK editor (v1/web/zmk-editor, ZMK Studio), and installing it from
   // this Vial editor would leave the device unreachable by this very app.
   const central = findAsset(release, 'kobu-rmk-central.uf2');
   const peripheral = findAsset(release, 'kobu-rmk-peripheral.uf2');

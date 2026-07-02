@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply ZMK editor "detailed settings" overrides to firmware/zmk/config.
+"""Apply ZMK editor "detailed settings" overrides to v1/firmware/zmk/config.
 
 Reads a JSON file (the decoded `overrides_b64` workflow input) of the form
 
@@ -67,7 +67,7 @@ def patch(path: Path, pattern: str, repl: str, label: str, count: int = 0) -> No
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("overrides_json")
-    ap.add_argument("--config-dir", default="firmware/zmk/config")
+    ap.add_argument("--config-dir", default="v1/firmware/zmk/config")
     args = ap.parse_args()
 
     cfg = Path(args.config_dir)

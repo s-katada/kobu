@@ -19,15 +19,15 @@ on:
   push:
     branches: [main]
     paths:
-      - "firmware/rmk/**"
-      - "firmware/zmk/**"
+      - "v1/firmware/rmk/**"
+      - "v1/firmware/zmk/**"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/firmware.yml"
   pull_request:
     paths:
-      - "firmware/rmk/**"
-      - "firmware/zmk/**"
+      - "v1/firmware/rmk/**"
+      - "v1/firmware/zmk/**"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/firmware.yml"
@@ -48,7 +48,7 @@ permissions:
   contents: write
 
 jobs:
-  # ── RMK firmware (firmware/rmk, Rust) ─────────────────────────────────────
+  # ── RMK firmware (v1/firmware/rmk, Rust) ──────────────────────────────────
   build-rmk:
     name: Build RMK firmware (Rust / Vial)
     # Custom (web-app override) builds tweak ZMK config only, so skip RMK there:
@@ -65,14 +65,14 @@ jobs:
       - name: Cache cargo target and installed binaries
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: firmware/rmk -> target
+          workspaces: v1/firmware/rmk -> target
           # Bust the cache when the nix-pinned toolchain OR the rmk source
           # patches change. build.rs patches the rmk crate's registry source
           # in place; a stale cache that still holds rmk compiled from an older
           # patch set (keyed only on flake.lock) is exactly what used to make
           # this job fail with "no `KOBU_*` in input_device::battery". Hashing
           # build.rs + keyboard.toml forces a clean registry on any patch change.
-          key: ${{ hashFiles('flake.lock', 'firmware/rmk/build.rs', 'firmware/rmk/keyboard.toml') }}
+          key: ${{ hashFiles('flake.lock', 'v1/firmware/rmk/build.rs', 'v1/firmware/rmk/keyboard.toml') }}
 
       - name: Install cargo-hex-to-uf2
         run: nix develop .#firmware --command cargo install --locked cargo-hex-to-uf2
@@ -80,7 +80,7 @@ jobs:
       - name: Build RMK central and peripheral
         run: |
           nix develop .#firmware --command bash -eux <<'EOF'
-          cd firmware/rmk
+          cd v1/firmware/rmk
           # kobu's build.rs patches REGISTRY SOURCES in place: the `rmk` crate
           # (KOBU_* atomics, conn-param/split tweaks, …), `trouble-host` (PPCP
           # 0x2A04 in the GAP service) and `rmk-macro` (SDC L2CAP queue depth +
@@ -111,7 +111,7 @@ jobs:
       - name: Build RMK factory-reset central and peripheral
         run: |
           nix develop .#firmware --command bash -eux <<'EOF'
-          cd firmware/rmk
+          cd v1/firmware/rmk
           sed -i 's/^clear_layout = false$/clear_layout = true/' keyboard.toml
           grep -q '^clear_layout = true$' keyboard.toml
           touch src/central.rs src/peripheral.rs
@@ -129,13 +129,13 @@ jobs:
         with:
           name: kobu-firmware-rmk
           path: |
-            firmware/rmk/kobu-rmk-central.uf2
-            firmware/rmk/kobu-rmk-peripheral.uf2
-            firmware/rmk/kobu-rmk-central-reset.uf2
-            firmware/rmk/kobu-rmk-peripheral-reset.uf2
+            v1/firmware/rmk/kobu-rmk-central.uf2
+            v1/firmware/rmk/kobu-rmk-peripheral.uf2
+            v1/firmware/rmk/kobu-rmk-central-reset.uf2
+            v1/firmware/rmk/kobu-rmk-peripheral-reset.uf2
           if-no-files-found: error
 
-  # ── ZMK firmware (firmware/zmk, zmk-nix) ──────────────────────────────────
+  # ── ZMK firmware (v1/firmware/zmk, zmk-nix) ───────────────────────────────
   # Produces kobu-zmk-left.uf2 (central + Studio), kobu-zmk-right.uf2 (peripheral)
   # and kobu-zmk-reset.uf2 (settings_reset). Runs on every event — including
   # custom (override) dispatches from the ZMK editor.
@@ -153,7 +153,7 @@ jobs:
         run: |
           set -euxo pipefail
           echo "${{ inputs.overrides_b64 }}" | base64 -d > /tmp/zmk-overrides.json
-          python3 scripts/zmk-apply-overrides.py /tmp/zmk-overrides.json
+          python3 v1/scripts/zmk-apply-overrides.py /tmp/zmk-overrides.json
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main

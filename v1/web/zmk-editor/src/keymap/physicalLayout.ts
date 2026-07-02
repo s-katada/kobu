@@ -1,6 +1,6 @@
 /**
  * kobu's 40-key (4×10) physical layout, in ZMK 1/100-key units, mirroring
- * `firmware/zmk/config/boards/shields/kobu/kobu.dtsi`.
+ * `v1/firmware/zmk/config/boards/shields/kobu/kobu.dtsi`.
  *
  * The live editor prefers the layout the firmware reports over the Studio
  * RPC (`getPhysicalLayouts`); this hardcoded copy is the fallback for the

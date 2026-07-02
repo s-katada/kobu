@@ -1,5 +1,5 @@
 /**
- * kobu's stock keymap as written in `firmware/zmk/config/kobu.keymap`,
+ * kobu's stock keymap as written in `v1/firmware/zmk/config/kobu.keymap`,
  * plus its custom behaviors and combos. Used for the offline preview
  * (visualise the default layout without a connected keyboard) and as a
  * reference list in the UI. The live editor reads the real keymap from

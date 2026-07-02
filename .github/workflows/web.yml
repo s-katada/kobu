@@ -4,13 +4,13 @@ on:
   push:
     branches: [main]
     paths:
-      - "web/**"
+      - "v1/web/**"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/web.yml"
   pull_request:
     paths:
-      - "web/**"
+      - "v1/web/**"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/web.yml"
@@ -18,7 +18,7 @@ on:
 
 defaults:
   run:
-    working-directory: web/rmk-editor
+    working-directory: v1/web/rmk-editor
 
 jobs:
   ci:
@@ -33,30 +33,30 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/share/pnpm/store
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('web/rmk-editor/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('v1/web/rmk-editor/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
       - name: Install dependencies
-        run: nix develop ../..#web --command pnpm install --frozen-lockfile
+        run: nix develop ../../..#web --command pnpm install --frozen-lockfile
 
       - name: Lint (Biome)
-        run: nix develop ../..#web --command pnpm lint
+        run: nix develop ../../..#web --command pnpm lint
 
       - name: Typecheck
-        run: nix develop ../..#web --command pnpm typecheck
+        run: nix develop ../../..#web --command pnpm typecheck
 
       - name: Test
-        run: nix develop ../..#web --command pnpm test
+        run: nix develop ../../..#web --command pnpm test
 
       - name: Build
-        run: nix develop ../..#web --command pnpm build
+        run: nix develop ../../..#web --command pnpm build
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: kobu-editor-dist
-          path: web/rmk-editor/dist
+          path: v1/web/rmk-editor/dist
           if-no-files-found: error
 
   # Gate-only job: cheap to spin up, and the deploy job is `needs:` it.
@@ -70,9 +70,9 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
-    # Override the workflow-level `working-directory: web` default —
-    # this job doesn't run actions/checkout (it's a cheap secret probe
-    # with no source files to consult), so `web/` doesn't exist in
+    # Override the workflow-level `working-directory: v1/web/rmk-editor`
+    # default — this job doesn't run actions/checkout (it's a cheap secret
+    # probe with no source files to consult), so `v1/web/` doesn't exist in
     # the runner workspace and bash refuses to start.
     defaults:
       run:
@@ -107,12 +107,13 @@ jobs:
     environment: production
     defaults:
       run:
-        # The project lives in web/rmk-editor (package.json + wrangler.jsonc are
-        # there; web/ itself has neither). `web` made install/build/wrangler all
-        # run in an empty dir AND mis-resolved `nix develop ../..#web` one level
-        # too shallow → the deploy job never shipped. The zmk-editor step below
-        # overrides this to web/zmk-editor explicitly.
-        working-directory: web/rmk-editor
+        # The project lives in v1/web/rmk-editor (package.json + wrangler.jsonc
+        # are there; v1/web/ itself has neither). A parent-dir working-directory
+        # once made install/build/wrangler all run in an empty dir AND
+        # mis-resolved the `nix develop ...#web` flake path one level too
+        # shallow → the deploy job never shipped. The zmk-editor step below
+        # overrides this to v1/web/zmk-editor explicitly.
+        working-directory: v1/web/rmk-editor
     steps:
       - uses: actions/checkout@v4
 
@@ -123,27 +124,27 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/share/pnpm/store
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('web/rmk-editor/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('v1/web/rmk-editor/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
       - name: Install dependencies
-        run: nix develop ../..#web --command pnpm install --frozen-lockfile
+        run: nix develop ../../..#web --command pnpm install --frozen-lockfile
 
       - name: Build production bundle
-        run: nix develop ../..#web --command pnpm build
+        run: nix develop ../../..#web --command pnpm build
 
       # The ZMK editor is a separate SPA served from the same Worker under
       # `/zmk`. Build it (base `/zmk/`) and drop it into the RMK editor's
       # `dist/zmk` (which the Worker serves) so the single `wrangler deploy`
       # uploads both apps. Runs AFTER the rmk-editor build above so the RMK
       # service worker never precaches zmk assets. zmk-editor is a sibling of
-      # rmk-editor, so from web/zmk-editor the target is ../rmk-editor/dist/zmk.
+      # rmk-editor, so from v1/web/zmk-editor the target is ../rmk-editor/dist/zmk.
       - name: Build ZMK editor into rmk-editor/dist/zmk
-        working-directory: web/zmk-editor
+        working-directory: v1/web/zmk-editor
         run: |
-          nix develop ../..#web --command pnpm install --frozen-lockfile
-          nix develop ../..#web --command pnpm build
+          nix develop ../../..#web --command pnpm install --frozen-lockfile
+          nix develop ../../..#web --command pnpm build
           rm -rf ../rmk-editor/dist/zmk
           mkdir -p ../rmk-editor/dist/zmk
           cp -r dist/. ../rmk-editor/dist/zmk/
@@ -159,4 +160,4 @@ jobs:
         #   CLOUDFLARE_ACCOUNT_ID    — your CF account id.
         # The token is read-only on the build side; revoke from the CF
         # dashboard if it ever leaks.
-        run: nix develop ../..#web --command pnpm exec wrangler deploy
+        run: nix develop ../../..#web --command pnpm exec wrangler deploy

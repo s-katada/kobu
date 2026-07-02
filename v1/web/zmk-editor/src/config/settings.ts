@@ -4,8 +4,8 @@
  * CPI, scroll/pointer scaling, hold-tap / tap-dance timing, combo
  * timeout, auto-mouse timeout). Editing any of these requires rebuilding
  * the firmware; the build pipeline (`config/build.ts`) sends the changed
- * values to GitHub Actions, which patches `firmware/zmk/config/*` via
- * `scripts/zmk-apply-overrides.py` and produces fresh UF2s.
+ * values to GitHub Actions, which patches `v1/firmware/zmk/config/*` via
+ * `v1/scripts/zmk-apply-overrides.py` and produces fresh UF2s.
  *
  * Each knob's `id` is the override key the patch script understands
  * (except `pointer_gain`, sent as `pointer_gain_x100`).

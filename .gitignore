@@ -4,7 +4,7 @@ result
 result-*
 
 # Rust / firmware
-firmware/rmk/target/
+**/firmware/rmk/target/
 **/*.rs.bk
 
 # macOS
@@ -20,11 +20,11 @@ firmware/rmk/target/
 **/*-cache.lib
 **/drc-*.txt
 **/erc-*.txt
-pcb/**/drc-report.txt
-pcb/**/drc-final.txt
-pcb/**/drc-parity.txt
-pcb/**/erc-report.txt
+**/pcb/**/drc-report.txt
+**/pcb/**/drc-final.txt
+**/pcb/**/drc-parity.txt
+**/pcb/**/erc-report.txt
 
 # KiCad: rolling backups (auto-generated, large binary churn)
-pcb/**/*-backups/
-pcb/**/production/backups/
+**/pcb/**/*-backups/
+**/pcb/**/production/backups/

@@ -9,13 +9,13 @@ on:
   push:
     branches: [main]
     paths:
-      - "web/zmk-editor/**"
+      - "v1/web/zmk-editor/**"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/zmk-editor.yml"
   pull_request:
     paths:
-      - "web/zmk-editor/**"
+      - "v1/web/zmk-editor/**"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/zmk-editor.yml"
@@ -23,7 +23,7 @@ on:
 
 defaults:
   run:
-    working-directory: web/zmk-editor
+    working-directory: v1/web/zmk-editor
 
 jobs:
   ci:
@@ -38,21 +38,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/share/pnpm/store
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('web/zmk-editor/pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('v1/web/zmk-editor/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
       - name: Install dependencies
-        run: nix develop ../..#web --command pnpm install --frozen-lockfile
+        run: nix develop ../../..#web --command pnpm install --frozen-lockfile
 
       - name: Lint (Biome)
-        run: nix develop ../..#web --command pnpm lint
+        run: nix develop ../../..#web --command pnpm lint
 
       - name: Typecheck
-        run: nix develop ../..#web --command pnpm typecheck
+        run: nix develop ../../..#web --command pnpm typecheck
 
       - name: Test
-        run: nix develop ../..#web --command pnpm test
+        run: nix develop ../../..#web --command pnpm test
 
       - name: Build
-        run: nix develop ../..#web --command pnpm build
+        run: nix develop ../../..#web --command pnpm build

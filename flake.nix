@@ -18,9 +18,9 @@
     };
 
     # ZMK build toolchain (west + Zephyr + gcc-arm-embedded) as a pure Nix
-    # derivation — drives the firmware/zmk build (see `packages.zmk*` and the
-    # `zmk` devShell below). No west / Zephyr / SDK need be installed on the
-    # host. Consumes firmware/zmk/config/west.yml to pin ZMK + modules.
+    # derivation — drives the v1/firmware/zmk build (see `packages.zmk*` and
+    # the `zmk` devShell below). No west / Zephyr / SDK need be installed on
+    # the host. Consumes v1/firmware/zmk/config/west.yml to pin ZMK + modules.
     zmk-nix = {
       url = "github:lilyinstarlight/zmk-nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -174,7 +174,7 @@
           # Required by bindgen (used by nrf-mpsl-sys through rmk).
           pkgs.llvmPackages.libclang
           pkgs.clang
-          # Render keymap SVG from firmware/rmk/keymap/*.yaml.
+          # Render keymap SVG from v1/firmware/rmk/keymap/*.yaml.
           pkgs.python3Packages.keymap-drawer
         ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
           pkgs.systemd
@@ -192,18 +192,18 @@
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
         };
 
-        # ── ZMK firmware (firmware/zmk) ──────────────────────────────────
-        # The ZMK config lives in the firmware/zmk/ subtree; root the build
+        # ── ZMK firmware (v1/firmware/zmk) ───────────────────────────────
+        # The ZMK config lives in the v1/firmware/zmk/ subtree; root the build
         # there so zmk-nix sees config/ + zephyr/module.yml at the src root.
         zmkLib = zmk-nix.legacyPackages.${system};
-        zmkSrc = pkgs.lib.sourceFilesBySuffices ./firmware/zmk [
+        zmkSrc = pkgs.lib.sourceFilesBySuffices ./v1/firmware/zmk [
           ".board" ".c" ".cmake" ".conf" ".defconfig" ".dts" ".dtsi"
           ".h" ".json" ".keymap" ".overlay" ".shield" ".txt" ".yml"
           "_defconfig" "Kconfig"
         ];
         zmkBoard = "seeeduino_xiao_ble";
         # FIXED-OUTPUT hash of the west-fetched module tree (ZMK v0.3 + Zephyr
-        # + pmw3610 driver + rgbled-widget v0.3, per firmware/zmk/config/west.yml).
+        # + pmw3610 driver + rgbled-widget v0.3, per v1/firmware/zmk/config/west.yml).
         # Re-bootstrap if that west.yml changes: set lib.fakeHash, build, paste
         # the reported `got: sha256-...`.
         zmkDepsHash = "sha256-ssNIO18+2Qo3RkWF7E4MGY4vxTPGygs6d0q2naPdivg=";
@@ -264,8 +264,8 @@
 
         devShells = {
           # Full kit — both firmware and web. The default shell for
-          # local dev when you might switch between firmware/ and web/
-          # in the same session.
+          # local dev when you might switch between v1/firmware/ and
+          # v1/web/ in the same session.
           default = pkgs.mkShell {
             packages = firmwarePackages ++ webPackages;
             env = firmwareEnv;
@@ -285,9 +285,10 @@
             '';
           };
 
-          # RMK firmware-only (firmware/rmk). Used by `firmware/rmk/.envrc`
-          # and `.github/workflows/firmware.yml` so the CI runner does not
-          # also have to materialise Node / pnpm just to build the binary.
+          # RMK firmware-only (v1/firmware/rmk). Used by
+          # `v1/firmware/rmk/.envrc` and `.github/workflows/firmware.yml`
+          # so the CI runner does not also have to materialise Node / pnpm
+          # just to build the binary.
           firmware = pkgs.mkShell {
             packages = firmwarePackages;
             env = firmwareEnv;
@@ -310,8 +311,8 @@
           };
 
           # ZMK build shell (west + cmake + ninja + dtc + gcc-arm-embedded +
-          # python). Used by `firmware/zmk/.envrc` for manual `west` builds /
-          # inspection; the packaged build is `nix build .#zmk-bundle`.
+          # python). Used by `v1/firmware/zmk/.envrc` for manual `west`
+          # builds / inspection; the packaged build is `nix build .#zmk-bundle`.
           #
           # A lean, hand-rolled shell rather than zmk-nix's own devShell: the
           # latter pulls Zephyr's full python requirements (incl. canopen),
