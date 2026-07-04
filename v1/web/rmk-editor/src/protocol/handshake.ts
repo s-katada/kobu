@@ -16,7 +16,7 @@
  */
 
 import { XzReadableStream } from 'xz-decompress';
-import { TransportError, VIAL_PACKET_SIZE } from '../transport/types';
+import { KOBU2_PRODUCT_ID, TransportError, VIAL_PACKET_SIZE } from '../transport/types';
 import type { WebHidTransport } from '../transport/webhid';
 import {
   buildGetKeyboardDef,
@@ -51,6 +51,16 @@ export interface KeyboardLayoutDef {
   matrix: { rows: number; cols: number };
   customKeycodes?: Array<{ name: string; title: string; shortName: string }>;
   layouts: { keymap: Array<Array<unknown>> };
+}
+
+/**
+ * True when the definition self-identifies as kobu2 (v2 hardware: one
+ * extra bottom-pinky key per half at keymap (3,0)/(3,9)). `productId`
+ * is the hex string the firmware embeds in its vial.json (e.g.
+ * "0x425A") — same VID and Vial UID as v1, different PID.
+ */
+export function isKobu2Definition(def: Pick<KeyboardLayoutDef, 'productId'>): boolean {
+  return Number.parseInt(def.productId ?? '', 16) === KOBU2_PRODUCT_ID;
 }
 
 export interface HandshakeResult {

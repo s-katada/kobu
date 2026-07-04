@@ -18,7 +18,7 @@
 
 import { useMemo } from 'react';
 import { type BallSide, kobuPhysicalLayout, type PhysicalKey } from '../layout/kobuPhysical';
-import type { KeyboardLayoutDef } from '../protocol/handshake';
+import { isKobu2Definition, type KeyboardLayoutDef } from '../protocol/handshake';
 import { type KeyLabel, labelForKeycode } from '../protocol/keycodes';
 import { accentText, cellTone, centerSize } from './keycapStyle';
 
@@ -59,7 +59,12 @@ export function PhysicalKeymapView({
   selectedBall = null,
   onBallClick,
 }: PhysicalKeymapViewProps) {
-  const layout = useMemo(() => kobuPhysicalLayout(), []);
+  // kobu2 (v2) はデバイスが自己申告する productId で判定し、小指列最下段の
+  // 2 キー (3,0)/(3,9) を含むジオメトリに切り替える。
+  const layout = useMemo(
+    () => kobuPhysicalLayout({ bottomPinky: isKobu2Definition(definition) }),
+    [definition],
+  );
   const width = layout.widthMm * SCALE;
   const height = layout.heightMm * SCALE;
 

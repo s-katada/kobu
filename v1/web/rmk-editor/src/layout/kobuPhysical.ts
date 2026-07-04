@@ -20,7 +20,10 @@
  *   * 左半身: col 0(外側ピンキー Q/A/Z) .. col 4(内側 T/G/B)
  *   * 右半身: 左のミラー。col = 9 - leftCol (col 5 = 内側 Y/H/N)
  *   * 親指行 row 3: 左 (3,4)=XIAO直下(最内) .. (3,1)=外側、右はミラー。
- *     (3,0) / (3,9) はファントム（スイッチ非実装）なので存在しない。
+ *     (3,0) / (3,9) は v1 ではファントム（スイッチ非実装）なので存在しない。
+ *     kobu2 (v2) では同じ座標が小指列最下段の実キー — `bottomPinky`
+ *     オプションでピンキー列 (col 0/9) の 4 段目として描画する。位置は
+ *     v2 ケース STL 実測どおり、既存ピンキー列の 1 行ピッチ (16mm) 下。
  */
 
 export type BallSide = 'left' | 'right';
@@ -85,6 +88,14 @@ export interface ThumbPlate {
   points: Array<{ x: number; y: number }>;
   /** 帯幅 (mm)。 */
   width: number;
+}
+
+export interface KobuPhysicalOptions {
+  /**
+   * kobu2 (v2): 小指列最下段キー keymap (3,0)/(3,9) を含める。
+   * v1 ではこの行列位置はファントム（未実装スイッチ）。
+   */
+  bottomPinky?: boolean;
 }
 
 export interface PhysicalLayout {
@@ -193,10 +204,15 @@ interface LeftGeometry {
   hinge: { x: number; y: number };
 }
 
-function buildLeftGeometry(): LeftGeometry {
+/** メイン基板の列ごとの最終行。kobu2 はピンキー列 (col 0) だけ 4 段目まである。 */
+function mainLastRow(col: number, bottomPinky: boolean): number {
+  return col === 0 && bottomPinky ? 3 : 2;
+}
+
+function buildLeftGeometry(bottomPinky: boolean): LeftGeometry {
   const keys: LeftGeometry['keys'] = [];
   for (let col = 0; col < MAIN_COL_X.length; col++) {
-    for (let row = 0; row < 3; row++) {
+    for (let row = 0; row <= mainLastRow(col, bottomPinky); row++) {
       keys.push({
         row,
         col,
@@ -257,9 +273,10 @@ function buildLeftGeometry(): LeftGeometry {
   return { keys, ball, xiao, thumbLine, filler, hinge };
 }
 
-/** kobu の統合物理レイアウトを構築する。結果は毎回同じ純粋データ。 */
-export function kobuPhysicalLayout(): PhysicalLayout {
-  const left = buildLeftGeometry();
+/** kobu の統合物理レイアウトを構築する。結果は同一オプションに対し毎回同じ純粋データ。 */
+export function kobuPhysicalLayout(options: KobuPhysicalOptions = {}): PhysicalLayout {
+  const bottomPinky = options.bottomPinky ?? false;
+  const left = buildLeftGeometry(bottomPinky);
 
   // 左半身の外接矩形（プレート余白・回転キー・ベゼルを含む）。
   const keyHalfDiag = (rot: number) => {
@@ -408,7 +425,7 @@ export function kobuPhysicalLayout(): PhysicalLayout {
     if (!topKey) continue;
     const w = KEY_W + PLATE_PAD * 2;
     const topEdge = topKey.y - KEY_H / 2 - PLATE_PAD;
-    const capBottom = topKey.y + ROW_PITCH * 2 + KEY_H / 2 + PLATE_PAD;
+    const capBottom = topKey.y + ROW_PITCH * mainLastRow(col, bottomPinky) + KEY_H / 2 + PLATE_PAD;
     const bandTop = col >= 1 ? bandTopAt(topKey.x) : null;
     const bottomEdge = bandTop === null ? capBottom : Math.max(capBottom, bandTop - MAIN_THUMB_GAP);
     const p = toLeft({ x: topKey.x, y: topEdge });

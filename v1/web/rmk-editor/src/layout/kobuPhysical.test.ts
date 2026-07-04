@@ -135,6 +135,66 @@ describe('kobuPhysicalLayout', () => {
   });
 });
 
+describe('kobuPhysicalLayout with bottomPinky (kobu2 / v2)', () => {
+  const v1 = kobuPhysicalLayout();
+  const v2 = kobuPhysicalLayout({ bottomPinky: true });
+
+  const at = (row: number, col: number) => {
+    const key = v2.keys.find((k) => k.row === row && k.col === col);
+    if (!key) throw new Error(`key (${row},${col}) missing`);
+    return key;
+  };
+
+  it('has 40 keys — v1 の 38 + 小指列最下段 (3,0)/(3,9)', () => {
+    expect(v2.keys).toHaveLength(40);
+    const seen = new Set(v2.keys.map((k) => `${k.row},${k.col}`));
+    expect(seen.size).toBe(40);
+    expect(at(3, 0)).toBeDefined();
+    expect(at(3, 9)).toBeDefined();
+  });
+
+  it('places the new key one row pitch below the pinky column, unrotated, non-thumb', () => {
+    const z = at(2, 0);
+    const a = at(1, 0);
+    const nk = at(3, 0);
+    // 同じ列 x、既存の行ピッチどおり 1 段下（v2 ケース STL 実測と一致）。
+    expect(nk.x).toBeCloseTo(z.x, 5);
+    expect(nk.y - z.y).toBeCloseTo(z.y - a.y, 5);
+    expect(nk.rot).toBeCloseTo(0, 5);
+    expect(nk.thumb).toBe(false);
+  });
+
+  it('mirrors the right-hand new key across the centerline', () => {
+    const left = at(3, 0);
+    const right = at(3, 9);
+    expect(left.x + right.x).toBeCloseTo(v2.widthMm, 5);
+    expect(right.y).toBeCloseTo(left.y, 5);
+  });
+
+  it('keeps the canvas size identical to v1 (new keys fit inside existing bounds)', () => {
+    expect(v2.widthMm).toBeCloseTo(v1.widthMm, 5);
+    expect(v2.heightMm).toBeCloseTo(v1.heightMm, 5);
+  });
+
+  it('extends only the pinky-column main plates by one row pitch', () => {
+    const leftPlates = (l: ReturnType<typeof kobuPhysicalLayout>) =>
+      l.mainPlates.filter((p) => p.side === 'left').sort((a, b) => a.x - b.x);
+    const v1Plates = leftPlates(v1);
+    const v2Plates = leftPlates(v2);
+    expect(v2Plates).toHaveLength(v1Plates.length);
+    for (let i = 0; i < v1Plates.length; i++) {
+      const grow = (v2Plates[i]?.height ?? 0) - (v1Plates[i]?.height ?? 0);
+      expect(grow).toBeCloseTo(i === 0 ? 16 : 0, 5);
+    }
+  });
+
+  it('does not disturb the thumb arc or trackballs', () => {
+    expect(v2.keys.filter((k) => k.thumb)).toHaveLength(8);
+    expect(v2.balls).toEqual(v1.balls);
+    expect(v2.hingeBumps).toEqual(v1.hingeBumps);
+  });
+});
+
 describe('isKobuMatrix', () => {
   it('accepts only the 4x10 kobu matrix', () => {
     expect(isKobuMatrix({ rows: 4, cols: 10 })).toBe(true);

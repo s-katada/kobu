@@ -105,3 +105,24 @@ describe('PhysicalKeymapView', () => {
     expect(onCellHover).toHaveBeenCalledWith({ row: 2, col: 3 });
   });
 });
+
+describe('PhysicalKeymapView with a kobu2 (v2) definition', () => {
+  // kobu2 は definition の productId (デバイス自己申告) で判定され、
+  // 小指列最下段の (3,0)/(3,9) が実キーとして描画される。
+  const KOBU2_DEFINITION: KeyboardLayoutDef = { ...DEFINITION, productId: '0x425A' };
+
+  it('renders 40 keys including the bottom-pinky pair (3,0)/(3,9)', () => {
+    renderView({ definition: KOBU2_DEFINITION });
+    expect(screen.getAllByLabelText(/^行 \d+ 列 \d+:/)).toHaveLength(40);
+    expect(screen.getByLabelText(/^行 3 列 0:/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^行 3 列 9:/)).toBeInTheDocument();
+  });
+
+  it('reports clicks on the new keys with their matrix position', async () => {
+    const { props } = renderView({ definition: KOBU2_DEFINITION });
+    await userEvent.click(screen.getByLabelText(/^行 3 列 0:/));
+    expect(props.onCellClick).toHaveBeenCalledWith(3, 0);
+    await userEvent.click(screen.getByLabelText(/^行 3 列 9:/));
+    expect(props.onCellClick).toHaveBeenCalledWith(3, 9);
+  });
+});

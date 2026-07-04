@@ -44,6 +44,18 @@ function fixtureLatestRelease() {
           browser_download_url:
             'https://github.com/s-katada/kobu/releases/download/firmware-latest/kobu-rmk-peripheral.uf2',
         },
+        {
+          name: 'kobu2-rmk-central.uf2',
+          size: 933888,
+          browser_download_url:
+            'https://github.com/s-katada/kobu/releases/download/firmware-latest/kobu2-rmk-central.uf2',
+        },
+        {
+          name: 'kobu2-rmk-peripheral.uf2',
+          size: 602112,
+          browser_download_url:
+            'https://github.com/s-katada/kobu/releases/download/firmware-latest/kobu2-rmk-peripheral.uf2',
+        },
       ],
     },
   ];
@@ -113,6 +125,52 @@ describe('FirmwareSection', () => {
     expect(screen.getByRole('button', { name: /セントラル.*をインストール/ })).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: /ペリフェラル.*をインストール/ }),
+    ).toBeInTheDocument();
+  });
+
+  it('switches to the kobu2 (v2) assets via the generation toggle', async () => {
+    vi.stubGlobal('fetch', mockFetchOk(fixtureLatestRelease()));
+    const { FirmwareSection } = await freshFirmwareSection();
+    render(<FirmwareSection />);
+    await waitFor(() =>
+      expect(screen.getByText('Latest firmware build (abc1234)')).toBeInTheDocument(),
+    );
+
+    // v1 (kobu) が既定 — kobu2 のアセットはまだ描画されない。
+    expect(screen.getByRole('link', { name: /kobu-rmk-central\.uf2/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /kobu2-rmk-central\.uf2/ })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'kobu2 (v2)' }));
+
+    const centralLink = screen.getByRole('link', { name: /kobu2-rmk-central\.uf2/ });
+    expect(centralLink).toHaveAttribute(
+      'href',
+      'https://github.com/s-katada/kobu/releases/download/firmware-latest/kobu2-rmk-central.uf2',
+    );
+    expect(centralLink).toHaveAttribute('download', 'kobu2-rmk-central.uf2');
+    expect(screen.getByRole('link', { name: /kobu2-rmk-peripheral\.uf2/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /kobu-rmk-central\.uf2/ })).not.toBeInTheDocument();
+  });
+
+  it('shows the not-yet-uploaded fallback when the selected generation has no assets', async () => {
+    const releases = fixtureLatestRelease();
+    const release = releases[0];
+    if (!release) throw new Error('fixture empty');
+    release.assets = release.assets.filter((a) => !a.name.startsWith('kobu2-'));
+    vi.stubGlobal('fetch', mockFetchOk(releases));
+    const { FirmwareSection } = await freshFirmwareSection();
+    render(<FirmwareSection />);
+    await waitFor(() =>
+      expect(screen.getByText('Latest firmware build (abc1234)')).toBeInTheDocument(),
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'kobu2 (v2)' }));
+
+    expect(
+      screen.getByText(/kobu2-rmk-central\.uf2 がまだアップロードされていません/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/kobu2-rmk-peripheral\.uf2 がまだアップロードされていません/),
     ).toBeInTheDocument();
   });
 

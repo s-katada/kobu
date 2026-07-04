@@ -16,7 +16,7 @@ vi.mock('xz-decompress', () => ({
 }));
 
 // Importing AFTER the mock declaration so vitest hoists the mock first.
-import { KOBU_KEYBOARD_UID, performHandshake, uidEquals } from './handshake';
+import { isKobu2Definition, KOBU_KEYBOARD_UID, performHandshake, uidEquals } from './handshake';
 
 const KOBU_UID = new Uint8Array(KOBU_KEYBOARD_UID);
 const OTHER_UID = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
@@ -99,6 +99,19 @@ describe('uidEquals', () => {
 
   it('returns false for different lengths', () => {
     expect(uidEquals(new Uint8Array([1, 2]), new Uint8Array([1, 2, 3]))).toBe(false);
+  });
+});
+
+describe('isKobu2Definition', () => {
+  it('recognises the kobu2 productId in either hex case', () => {
+    expect(isKobu2Definition({ productId: '0x425A' })).toBe(true);
+    expect(isKobu2Definition({ productId: '0x425a' })).toBe(true);
+  });
+
+  it('rejects the v1 productId and missing/garbage values', () => {
+    expect(isKobu2Definition({ productId: '0x4259' })).toBe(false);
+    expect(isKobu2Definition({})).toBe(false);
+    expect(isKobu2Definition({ productId: 'not-hex' })).toBe(false);
   });
 });
 

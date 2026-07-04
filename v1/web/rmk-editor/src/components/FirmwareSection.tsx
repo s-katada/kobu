@@ -14,8 +14,17 @@
  * The section is always visible — users typically arrive here to
  * install firmware *before* they can connect, so we shouldn't gate it
  * on the connection state.
+ *
+ * Generations: the same release carries both kobu (v1, `kobu-rmk-*.uf2`)
+ * and kobu2 (v2, `kobu2-rmk-*.uf2`) assets. Which set this section
+ * offers follows the connected device's own definition (productId) and
+ * can be switched manually — essential when flashing a board that
+ * cannot connect yet.
  */
 
+import { useState } from 'react';
+import { isKobu2Definition } from '../protocol/handshake';
+import { useConnectionStore } from '../state/connection';
 import {
   type FirmwareRelease,
   findAsset,
@@ -24,8 +33,27 @@ import {
 } from '../state/firmware';
 import { InstallButton, type InstallTarget } from './InstallButton';
 
+/** ハードウェア世代。リリースアセットの接頭辞 (`<generation>-rmk-*`) と一致する。 */
+export type Generation = 'kobu' | 'kobu2';
+
+const GENERATION_LABELS: Record<Generation, string> = {
+  kobu: 'kobu (v1)',
+  kobu2: 'kobu2 (v2)',
+};
+
 export function FirmwareSection() {
   const { state, refresh } = useFirmwareReleases();
+  const connection = useConnectionStore((s) => s.state);
+  // 接続中デバイスの definition (デバイス自身が申告する productId) から
+  // 世代を自動判定。未接続なら手動選択（既定 v1）。
+  const detected: Generation | null =
+    connection.kind === 'ready'
+      ? isKobu2Definition(connection.handshake.definition)
+        ? 'kobu2'
+        : 'kobu'
+      : null;
+  const [manual, setManual] = useState<Generation | null>(null);
+  const generation = manual ?? detected ?? 'kobu';
 
   return (
     <section className="space-y-4">
@@ -44,6 +72,36 @@ export function FirmwareSection() {
         BLE をそれぞれブートローダモード (RESET 2 連打)
         にしてから「インストール」を実行してください。
       </p>
+
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-zinc-500 dark:text-zinc-400">対象キーボード:</span>
+        {(Object.keys(GENERATION_LABELS) as Generation[]).map((g) => (
+          <button
+            key={g}
+            type="button"
+            aria-pressed={generation === g}
+            onClick={() => setManual(g)}
+            className={[
+              'rounded-md border px-2.5 py-1 text-xs font-medium',
+              generation === g
+                ? 'border-sky-500 bg-sky-50 dark:bg-sky-950 text-sky-700 dark:text-sky-300'
+                : 'border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:border-zinc-400',
+            ].join(' ')}
+          >
+            {GENERATION_LABELS[g]}
+          </button>
+        ))}
+        {detected !== null && manual === null && (
+          <span className="text-xs text-emerald-600 dark:text-emerald-400">
+            接続中のデバイスから自動選択
+          </span>
+        )}
+        {detected !== null && manual !== null && manual !== detected && (
+          <span className="text-xs text-amber-600 dark:text-amber-400">
+            ⚠️ 接続中のデバイスは {GENERATION_LABELS[detected]} です
+          </span>
+        )}
+      </div>
 
       {state.kind === 'loading' && (
         <p className="text-sm text-zinc-500 dark:text-zinc-400">リリース情報を取得中…</p>
@@ -71,22 +129,33 @@ export function FirmwareSection() {
       )}
 
       {state.kind === 'ready' &&
-        state.releases.map((release) => <ReleaseCard key={release.tag} release={release} />)}
+        state.releases.map((release) => (
+          <ReleaseCard key={release.tag} release={release} generation={generation} />
+        ))}
     </section>
   );
 }
 
-function ReleaseCard({ release }: { release: FirmwareRelease }) {
+function ReleaseCard({
+  release,
+  generation,
+}: {
+  release: FirmwareRelease;
+  generation: Generation;
+}) {
   // This is the RMK (Vial) editor — it installs the RMK firmware only
   // (central/peripheral + factory-reset). The ZMK build that the same
   // `firmware-latest` release also carries (kobu-zmk-left/right/reset.uf2) is
   // deliberately NOT offered here: ZMK is flashed + configured from the
   // separate ZMK editor (v1/web/zmk-editor, ZMK Studio), and installing it from
   // this Vial editor would leave the device unreachable by this very app.
-  const central = findAsset(release, 'kobu-rmk-central.uf2');
-  const peripheral = findAsset(release, 'kobu-rmk-peripheral.uf2');
-  const centralReset = findAsset(release, 'kobu-rmk-central-reset.uf2');
-  const peripheralReset = findAsset(release, 'kobu-rmk-peripheral-reset.uf2');
+  //
+  // Asset names are generation-prefixed: kobu-rmk-* (v1) / kobu2-rmk-* (v2).
+  const prefix = `${generation}-rmk`;
+  const central = findAsset(release, `${prefix}-central.uf2`);
+  const peripheral = findAsset(release, `${prefix}-peripheral.uf2`);
+  const centralReset = findAsset(release, `${prefix}-central-reset.uf2`);
+  const peripheralReset = findAsset(release, `${prefix}-peripheral-reset.uf2`);
   const published = formatPublishedAt(release.publishedAt);
 
   return (
@@ -122,14 +191,14 @@ function ReleaseCard({ release }: { release: FirmwareRelease }) {
           target="central"
           asset={central}
           resetAsset={centralReset}
-          fallbackName="kobu-rmk-central.uf2"
+          fallbackName={`${prefix}-central.uf2`}
         />
         <AssetPanel
           label="ペリフェラル (右半分)"
           target="peripheral"
           asset={peripheral}
           resetAsset={peripheralReset}
-          fallbackName="kobu-rmk-peripheral.uf2"
+          fallbackName={`${prefix}-peripheral.uf2`}
         />
       </div>
 
