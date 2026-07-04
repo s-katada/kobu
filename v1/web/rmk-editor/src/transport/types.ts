@@ -5,11 +5,22 @@
  * lives in `src/protocol/`.
  */
 
-/** USB vendor id from `firmware/keyboard.toml`. */
+/** USB vendor id shared by every kobu generation (each `firmware/rmk/keyboard.toml`). */
 export const KOBU_VENDOR_ID = 0x4b4f;
 
-/** USB product id from `firmware/keyboard.toml`. */
+/** USB product id of kobu v1 (`v1/firmware/rmk/keyboard.toml`). */
 export const KOBU_PRODUCT_ID = 0x4259;
+
+/** USB product id of kobu v2 = "kobu2" (`v2/firmware/rmk/keyboard.toml`). */
+export const KOBU2_PRODUCT_ID = 0x425a;
+
+/**
+ * Every product id the editor recognises as a kobu — same vendor id,
+ * one product id per hardware generation. Extend when a new generation
+ * ships; both the WebHID device picker filter and the reconnect
+ * predicate iterate this list.
+ */
+export const KOBU_PRODUCT_IDS: readonly number[] = [KOBU_PRODUCT_ID, KOBU2_PRODUCT_ID];
 
 /**
  * Raw HID usage page for Vial's vendor-defined report. Matches

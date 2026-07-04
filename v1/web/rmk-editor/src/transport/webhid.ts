@@ -10,7 +10,7 @@
 import {
   emptyPacket,
   intoVialPacket,
-  KOBU_PRODUCT_ID,
+  KOBU_PRODUCT_IDS,
   KOBU_VENDOR_ID,
   TransportError,
   VIAL_PACKET_SIZE,
@@ -38,14 +38,14 @@ export async function requestKobuDevice(): Promise<HIDDevice | null> {
     throw new TransportError('webhid-unsupported', 'WebHID is not available in this browser');
   }
   const devices = await navigator.hid.requestDevice({
-    filters: [
-      {
-        vendorId: KOBU_VENDOR_ID,
-        productId: KOBU_PRODUCT_ID,
-        usagePage: VIAL_USAGE_PAGE,
-        usage: VIAL_USAGE,
-      },
-    ],
+    // One filter entry per kobu generation (v1 / kobu2) — same VID and
+    // Vial usage, different PID.
+    filters: KOBU_PRODUCT_IDS.map((productId) => ({
+      vendorId: KOBU_VENDOR_ID,
+      productId,
+      usagePage: VIAL_USAGE_PAGE,
+      usage: VIAL_USAGE,
+    })),
   });
   return devices[0] ?? null;
 }
@@ -60,7 +60,7 @@ export async function getPreviouslyAuthorizedKobuDevices(): Promise<HIDDevice[]>
   return devices.filter(
     (d) =>
       d.vendorId === KOBU_VENDOR_ID &&
-      d.productId === KOBU_PRODUCT_ID &&
+      KOBU_PRODUCT_IDS.includes(d.productId) &&
       d.collections.some((c) => c.usagePage === VIAL_USAGE_PAGE && c.usage === VIAL_USAGE),
   );
 }

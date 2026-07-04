@@ -3,7 +3,9 @@ import {
   emptyPacket,
   intoVialPacket,
   KOBU_PRODUCT_ID,
+  KOBU_PRODUCT_IDS,
   KOBU_VENDOR_ID,
+  KOBU2_PRODUCT_ID,
   TransportError,
   VIAL_PACKET_SIZE,
   VIAL_USAGE,
@@ -80,7 +82,7 @@ function createMockDevice(): MockHIDDevice {
 
 function installFakeHid(devices: HIDDevice[], pick: HIDDevice | null) {
   const hid = {
-    requestDevice: vi.fn(async () => (pick ? [pick] : [])),
+    requestDevice: vi.fn(async (_options?: HIDDeviceRequestOptions) => (pick ? [pick] : [])),
     getDevices: vi.fn(async () => devices),
   };
   (navigator as unknown as { hid: typeof hid }).hid = hid;
@@ -121,6 +123,19 @@ describe('requestKobuDevice', () => {
     installFakeHid([], null);
     await expect(requestKobuDevice()).resolves.toBeNull();
   });
+
+  it('asks the picker for every kobu generation (v1 + kobu2)', async () => {
+    const hid = installFakeHid([], null);
+    await requestKobuDevice();
+    expect(hid.requestDevice).toHaveBeenCalledWith({
+      filters: KOBU_PRODUCT_IDS.map((productId) => ({
+        vendorId: KOBU_VENDOR_ID,
+        productId,
+        usagePage: VIAL_USAGE_PAGE,
+        usage: VIAL_USAGE,
+      })),
+    });
+  });
 });
 
 describe('getPreviouslyAuthorizedKobuDevices', () => {
@@ -136,6 +151,15 @@ describe('getPreviouslyAuthorizedKobuDevices', () => {
     installFakeHid([kobu, notKobu], null);
     const got = await getPreviouslyAuthorizedKobuDevices();
     expect(got).toEqual([kobu]);
+  });
+
+  it('accepts a kobu2 (v2 product id) device', async () => {
+    const kobu2 = {
+      ...createMockDevice(),
+      productId: KOBU2_PRODUCT_ID,
+    } as unknown as HIDDevice;
+    installFakeHid([kobu2], null);
+    await expect(getPreviouslyAuthorizedKobuDevices()).resolves.toEqual([kobu2]);
   });
 
   it('returns an empty list when WebHID is not available', async () => {
