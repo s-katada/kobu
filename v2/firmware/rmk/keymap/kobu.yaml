@@ -1,0 +1,80 @@
+# kobu v2: the grid is drawn as 4 rows — the 4th row holds the two new
+# bottom-pinky keys (keymap (3,0)/(3,9), /ROW3 x /COL4). The 8 inner cells of
+# that row have no physical switch and are drawn as `ghost` keys. Thumb-row
+# key indices therefore start at 40 (combos below all reference indices < 30,
+# so they are unaffected vs v1).
+layout:
+  ortho_layout:
+    split: true
+    rows: 4
+    columns: 5
+    thumbs: 4
+
+draw_config:
+  n_columns: 2
+
+layers:
+  Mac:
+    - [Q, W, E, R, T, Y, U, I, O, P]
+    - [A, S, D, F, G, H, J, K, L, {t: ':', h: Cmd+Shift, s: ';'}]
+    - [Z, X, C, V, B, N, M, ',', ., {t: '/', h: Cmd+Ctrl, s: '?'}]
+    - [Shift, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, Shift]
+    - [BS, {t: BS, h: Cmd}, Ctrl, {t: 英数, h: Shift}, {t: Esc, h: Alt}, {t: Space, h: 数字}, {t: Enter, h: 設定}, BS]
+  Win/Linux:
+    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
+       {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
+       {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ':', h: Ctrl+Shift, s: ';'}]
+    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
+       {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: '/', h: Ctrl+Alt, s: '?'}]
+    - [{t: ▽, type: trans}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {t: BS, h: Alt}, {t: LGui, h: Emacs}, {t: ▽, type: trans}, {t: Esc, h: Win}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
+  数字:
+    - ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0']
+    - ['!', '@', '#', '$', '%', ←, ↓, ↑, →, {t: ▽, type: trans}]
+    - ['^', '&', '*', '(', ')', '', '', '', '', {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: かな, h: Shift}, {t: ▽, type: trans}, {type: held}, {t: ▽, type: trans}, {t: ▽, type: trans}]
+  設定:
+    - [BT0, BT1, BT2, BT3, '', 前曲, 再生, 次曲, 音量-, 音量+]
+    - [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10]
+    - [{t: Mac, h: to 0}, {t: Win, h: tog 1}, '', '', Clear BT, F11, F12, F13, '', {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, Del, {t: ▽, type: trans}, {type: held}, {t: ▽, type: trans}]
+  マウス:
+    - [前タブ, 次タブ, '', '', '', 左クリック, 右クリック, 右クリック, 中クリック, {t: ▽, type: trans}]
+    - [{t: 戻る, h: Shift}, 進む, Tab, Cmd, '', '', '', '', '', {t: ▽, type: trans}]
+    - [Ctrl, '', コピー, ペースト, '', '', '', '', '', {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
+  Emacs:
+    - [Ctl+Q, Ctl+W, End, Ctl+R, Ctl+T, Ctl+Y, Ctl+U, Ctl+I, Ctl+O, ↑]
+    - [{t: Home, s: 2tap Ctl+A}, Ctl+S, Del, →, Ctl+G, BS, Ctl+J, {t: Ctl+K, s: 行削除}, Ctl+L, 'Ctl+;']
+    - [Ctl+Z, Ctl+X, Ctl+C, Ctl+V, ←, ↓, Ctl+M, 'Ctl+,', 'Ctl+.', "Ctl+'"]
+    - [{t: ▽, type: trans}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {type: held}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
+  Neovim:
+    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
+       {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
+       {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
+       {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {type: ghost}, {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {t: ▽, type: trans}, Ctrl, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
+
+combos:
+  - {p: [12, 13], k: {h: Cmd+Opt}, l: [Mac]}
+  - {p: [12, 13], k: {h: Ctrl+Alt}, l: [Win/Linux]}
+  - {p: [10, 11], k: Tab, l: [Mac, Win/Linux]}
+  - {p: [7, 8], k: {t: '-', s: '_'}, l: [Mac, Win/Linux]}
+  - {p: [8, 9], k: {t: '=', s: +}, l: [Mac, Win/Linux]}
+  - {p: [18, 19], k: {t: "'", s: '"'}, l: [Mac, Win/Linux]}
+  - {p: [27, 28], k: {t: '/', s: '?'}, l: [Mac, Win/Linux]}
+  - {p: [25, 26], k: BS, l: [Mac, Win/Linux]}
+  - {p: [0, 1], k: {t: '`', s: '~'}, l: [Mac, Win/Linux]}
+  - {p: [6, 7], k: {t: '|', s: '\\'}, l: [Mac, Win/Linux]}
+  - {p: [16, 17], k: {t: '[', s: '{'}, l: [Mac, Win/Linux]}
+  - {p: [17, 18], k: {t: ']', s: '}'}, l: [Mac, Win/Linux]}
+  - {p: [5, 6], k: BS, l: [Mac, Win/Linux]}
+  - {p: [11, 12], k: {t: Neovim, s: tog 6}, l: [Win/Linux, Neovim]}

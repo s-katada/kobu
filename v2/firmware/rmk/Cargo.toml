@@ -1,0 +1,104 @@
+[package]
+name = "kobu"
+version = "0.1.0"
+authors = ["s-katada <shunya.saitama@gmail.com>"]
+description = "Firmware for kobu split keyboard with trackball"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rmk = { version = "0.8", features = [
+    "nrf52840_ble",
+    "split",
+    "async_matrix",
+    "adafruit_bl",
+] }
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "11d5c3c", features = [
+    "defmt",
+    "peripheral",
+    "central",
+    "nrf52840",
+] }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "11d5c3c", features = [
+    "defmt",
+    "critical-section-impl",
+    "nrf52840",
+] }
+bt-hci = { version = "0.6", default-features = false, features = ["defmt"] }
+
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.5"
+embassy-time = { version = "0.5", features = ["tick-hz-32_768", "defmt", "defmt-timestamp-uptime"] }
+embassy-nrf = { version = "0.8", features = [
+    "defmt",
+    "nrf52840",
+    "time-driver-rtc1",
+    "gpiote",
+    "unstable-pac",
+    "nfc-pins-as-gpio",
+    "time",
+] }
+embassy-executor = { version = "0.9", features = [
+    "defmt",
+    "arch-cortex-m",
+    "executor-thread",
+] }
+# Used for the PERIPHERAL_ACTIVITY signal between PointerProcessor and the
+# status LED controller. Must match the version rmk pulls in.
+embassy-sync = "0.7"
+defmt = "1.0"
+defmt-rtt = "1.0"
+panic-probe = { version = "1.0", features = ["print-defmt"] }
+static_cell = "2"
+
+rand = { version = "0.8.4", default-features = false }
+rand_core = { version = "0.6" }
+rand_chacha = { version = "0.3", default-features = false }
+
+# `src/scroll_processor.rs` builds `MouseReport` values directly.
+# Must match the version rmk 0.8 pulls in to avoid duplicate types.
+usbd-hid = "0.9"
+
+# rmk pulls embassy-usb 0.5, which depends on embassy-usb-driver 0.2.x.
+# Pin to =0.2.0 to match upstream rmk-template (nrf52840_split) and
+# guard against accidental cargo update -p picking a newer driver
+# version that introduces a breaking change.
+embassy-usb-driver = "=0.2.0"
+
+[build-dependencies]
+xz2 = "0.1.7"
+json = "0.12"
+const-gen = "1.6"
+
+[features]
+# Temporary on-device diagnostic for the pointer-のろのろ investigation: makes
+# the central status LED show the live macOS host BLE connection interval as a
+# color band (green ≤9ms / blue ~11ms / purple ~15ms / red ≥20ms) and flash
+# WHITE when pointer travel is clamp-dropped. Build the diagnostic UF2 with
+# `--features led-conn-diag`; the normal build omits it (battery/layer LED
+# unchanged). All diag code is `if cfg!(feature = "led-conn-diag")`-gated so the
+# normal binary is byte-for-byte unaffected.
+led-conn-diag = []
+
+[[bin]]
+name = "central"
+path = "src/central.rs"
+
+[[bin]]
+name = "peripheral"
+path = "src/peripheral.rs"
+
+[profile.dev]
+codegen-units = 1
+debug = true
+opt-level = 1
+overflow-checks = true
+lto = false
+panic = 'unwind'
+
+[profile.release]
+codegen-units = 1
+debug = true
+opt-level = "z"
+overflow-checks = false
+lto = "fat"

@@ -1,0 +1,47 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+runner = "probe-rs run --chip nRF52840_xxAA"
+linker = "flip-link"
+
+[build]
+target = "thumbv7em-none-eabihf"
+
+[env]
+DEFMT_LOG = "info"
+KEYBOARD_TOML_PATH = { value = "keyboard.toml", relative = true }
+# rmk-types pulls in enough proc-macro work (strum, postcard, bitfield_struct,
+# defmt) to blow rustc's default 8 MiB thread stack on some hosts. 16 MiB is
+# what rustc itself recommends in the SIGSEGV hint.
+RUST_MIN_STACK = "16777216"
+# Round 10 / Layer D (boot-trackball wedge, defence-in-depth): widen trouble-host's
+# ONE shared outbound queue + packet pool (defaults 8 / 16) that BOTH the Mac host
+# link and the split-peripheral link multiplex through on the single radio. A
+# bigger pool keeps RX reassembly buffers available for the Mac's PDUs even while
+# split-link pointer traffic is queued, breaking the "pool pinned -> inbound drop"
+# reinforcing loop during a stale resume. trouble-host's build.rs reads these
+# (crate name uppercased, '-'->'_'); needs `cargo clean -p trouble-host` once.
+TROUBLE_HOST_L2CAP_TX_QUEUE_SIZE = "16"
+TROUBLE_HOST_DEFAULT_PACKET_POOL_SIZE = "32"
+# THE pointer-もっさり fix (root cause, source-confirmed): the central is the
+# GATT CLIENT of the split link and buffers the peripheral's pointer
+# notifications in a PubSubChannel of depth GATT_CLIENT_NOTIFICATION_QUEUE_SIZE,
+# which DEFAULTS TO 1 (trouble-host build.rs). Notifications are delivered via
+# publish_immediate(), which DROPS THE OLDEST when the queue is full. At the
+# peripheral's ~500Hz pointer rate, any moment the central is busy (a host
+# connection event on the shared radio) overwrites the un-drained pointer
+# notification → pointer samples lost → cursor under-travels ("もっさり"), while
+# scroll (central-local, not a GATT notification) is unaffected, and a reconnect
+# re-subscribes a fresh queue. Bump to 16 so the central can buffer ~32ms of
+# pointer notifications and ride out transient busy periods without dropping.
+# (~16 × 512B ≈ 8KB RAM. Needs `cargo clean -p trouble-host` once.)
+TROUBLE_HOST_GATT_CLIENT_NOTIFICATION_QUEUE_SIZE = "16"
+# The LAST un-widened lossy stage on the inbound split path. The central is the
+# GATT CLIENT of the split link; inbound notification PDUs land in
+# connection_manager.rs GattChannel = Channel<.., L2CAP_RX_QUEUE_SIZE> which is
+# still the trouble-host DEFAULT 8 — round 16 only widened the DOWNSTREAM NOTIF
+# PubSub. post_gatt_client() does try_send -> Error::OutOfMemory and DROPS the
+# PDU at the connection layer BEFORE the NOTIF queue ever sees it, so a burst
+# can still drop here. Widen to 16 to match the NOTIF depth so the two stages
+# don't bottleneck each other. With the 8ms PMW3610 poll the source no longer
+# over-feeds, so this is belt-and-suspenders, but cheap (~16 × 512B ≈ 8KB RAM).
+# Needs `cargo clean -p trouble-host` once.
+TROUBLE_HOST_L2CAP_RX_QUEUE_SIZE = "16"

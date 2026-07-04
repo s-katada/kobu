@@ -1,0 +1,28 @@
+{
+    "name": "kobu2",
+    "vendorId": "0x4B4F",
+    "productId": "0x425A",
+    "lighting": "none",
+    "matrix": {
+        "rows": 4,
+        "cols": 10
+    },
+    "customKeycodes": [
+        { "name": "BT0",     "title": "Bluetooth Channel 0", "shortName": "BT0" },
+        { "name": "BT1",     "title": "Bluetooth Channel 1", "shortName": "BT1" },
+        { "name": "BT2",     "title": "Bluetooth Channel 2", "shortName": "BT2" },
+        { "name": "BT3",     "title": "Bluetooth Channel 3", "shortName": "BT3" },
+        { "name": "NEXT_BT", "title": "Switch to the next Bluetooth channel",     "shortName": "Next\nBT" },
+        { "name": "PREV_BT", "title": "Switch to the previous Bluetooth channel", "shortName": "Prev\nBT" },
+        { "name": "CLR_BT",  "title": "Clear bond info for current channel",      "shortName": "Clear\nBT" },
+        { "name": "SWITCH",  "title": "Switch default output mode between USB/BLE","shortName": "Switch\nOutput" }
+    ],
+    "layouts": {
+        "keymap": [
+            [ "0,0", "0,1", "0,2", "0,3", "0,4", { "x": 1 }, "0,5", "0,6", "0,7", "0,8", "0,9" ],
+            [ "1,0", "1,1", "1,2", "1,3", "1,4", { "x": 1 }, "1,5", "1,6", "1,7", "1,8", "1,9" ],
+            [ "2,0", "2,1", "2,2", "2,3", "2,4", { "x": 1 }, "2,5", "2,6", "2,7", "2,8", "2,9" ],
+            [ "3,0", "3,1", "3,2", "3,3", "3,4", { "x": 1 }, "3,5", "3,6", "3,7", "3,8", "3,9" ]
+        ]
+    }
+}

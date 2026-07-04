@@ -1,0 +1,592 @@
+# kobu v2 firmware configuration.
+#
+# Hardware: split keyboard with two XIAO nRF52840 BLE modules (one on each
+# thumb-unit PCB). Each side has a 4x5 scan matrix covering 16 main-unit
+# switches (rows 0..2 plus the v2 bottom pinky key on row 3) and 4 thumb-unit
+# switches on row 3 at COL0..COL3. The ONE hardware difference vs v1: the
+# previously free ROW3 x COL4 intersection now carries a 4th pinky-column
+# switch on the main unit (/ROW3 reaches the main PCB over a spare FFC line).
+# The thumb unit's fifth silk-labeled switch (SW1) is an MSK-12D19 slide
+# switch acting as the physical power cutoff, not a matrix key.
+#
+# Pin assignments below are derived from the KiCad schematic/PCB for the
+# thumb unit. Important: the COL nets are not in XIAO D10..D7 order. The PCB
+# connects the logical matrix nets as:
+#   D0  (P0_02, pin 1)  -> SDIO   (trackball, bidirectional data)
+#   D1  (P0_03, pin 2)  -> SCLK   (trackball clock)
+#   D2  (P0_28, pin 3)  -> MOTION (trackball IRQ, active low)
+#   D3  (P0_29, pin 4)  -> ROW0
+#   D4  (P0_04, pin 5)  -> ROW1
+#   D5  (P0_05, pin 6)  -> ROW2
+#   D6  (P1_11, pin 7)  -> ROW3
+#   D7  (P1_12, pin 8)  -> COL0
+#   D8  (P1_13, pin 9)  -> COL1
+#   D9  (P1_14, pin 10) -> COL2
+#   D10 (P1_15, pin 11) -> COL3
+#   NFC2(P0_10, pin 22) -> COL4  (back-side pad, NFC disabled in firmware)
+#   NFC1(P0_09, pin 21) -> NCS   (trackball chip-select, back-side pad)
+#   USER_LED_G(P0_30)   -> boot indicator LED (common anode, LOW = on)
+# FFC cable type (CRITICAL):
+#   The thumb-unit J1 pinout is "natural order" (1=+3V3, 2=GND, 3..5=ROW0..2,
+#   6..10=COL0..4). The main-unit J1 pinout is the EXACT REVERSE
+#   (1=COL4..10=+3V3). For these to mate as designed, the FFC cable must
+#   reverse pin mapping (pin 1 of one connector goes to pin 10 of the
+#   other). With the wrong cable (straight mapping pin 1 ↔ pin 1) the
+#   matrix scans 90° rotated AND P0.10 / P1.15 get shorted to +3V3 / GND
+#   respectively, killing two columns and leaving the chip vulnerable.
+#
+#   Multimeter check (power OFF):
+#     main J1 pin 1 (COL4) ↔ thumb J1 pin 10 (COL4) → MUST beep
+#     main J1 pin 1 (COL4) ↔ thumb J1 pin 1  (+3V3) → must NOT beep
+#   If the second test beeps, swap to a reverse-mapping FFC ("opposite-
+#   contact" / "Type 2"). No firmware change can compensate cleanly for
+#   the wrong cable since two MCU pins are clamped to power rails.
+#
+# Diode direction (CONFIRMED 2026-05-12):
+#   Both main and thumb units use diodes installed PER SILKSCREEN —
+#   that is, the band/cathode marking matches the silkscreen K mark,
+#   so the ANODE is on the /ROW net (matching the KiCad netlist).
+#
+#   This means the matrix MUST be scanned in row2col direction (drive
+#   /ROW high, read /COL high) for the diode forward direction to
+#   match: current flows /ROW (anode) → switch → /COL (cathode →
+#   input).
+#
+#   ⚠️ Earlier diagnoses incorrectly claimed main was reversed and
+#   recommended reflowing the thumb diodes to "match" — DO NOT follow
+#   that path. The correct configuration is:
+#       row2col = true on both [split.*.matrix] sections (set below)
+#       All diodes installed per silkscreen, both halves.
+#   If you reflow thumb diodes anode-on-/COL while main stays per-
+#   silkscreen, you create a MIXED matrix that no single RMK scan
+#   direction can serve.
+#
+# Column ordering: LEFT col_pins are listed in REVERSED net order (keymap
+# col 0 = /COL4 = outer pinky, keymap col 4 = /COL0 = inner index); RIGHT
+# col_pins are natural (keymap col 5 = /COL0 = inner index, keymap col 9 =
+# /COL4 = outer pinky) — see the [split.*.matrix] sections below. On row 3
+# the thumbs sit at keymap cols 1..4 (left, /COL3../COL0) and 5..8 (right,
+# /COL0../COL3); the v2 bottom pinky keys land on the /ROW3 x /COL4
+# intersections = keymap (3, 0) and (3, 9), which were phantom slots on v1.
+# ROW/COL nets are shared between main and thumb boards via J1.
+
+[keyboard]
+name = "kobu2"
+product_name = "kobu2"
+vendor_id = 0x4b4f
+product_id = 0x425A
+manufacturer = "s-katada"
+# Seeed XIAO nRF52840 BLE — enables the nrf52840 chip defaults in RMK.
+board = "XIAO BLE"
+usb_enable = true
+
+[layout]
+rows = 4
+cols = 10
+layers = 7
+# 40-key 4×10 split — v2's bottom pinky keys (LShift/RShift) fill (3,0) and
+# (3,9), which were phantom slots on v1. Keymap otherwise ported
+# position-by-position from KobitoKey_QWERTY (ZMK source-of-truth) — see
+# ../KobitoKey_QWERTY/config/KobitoKey.keymap. The kobu PCB has 4 thumbs per
+# side vs KobitoKey's 3. After the outward thumb shift the base-layer cluster
+# is BS at the XIAO直下 (innermost) thumb on each half, with the source thumb
+# functions moved one slot outward (see the per-thumb listing above row 3).
+#
+# ZMK LANG2 / LANG1 → RMK Language2 / Language1 (HID 0x91 / 0x90). These are
+# the actual 英数 / かな keys on macOS JIS. The previous port used
+# International5 / International4 (HID 0x8B / 0x8A = Muhenkan/Henkan) which
+# macOS does NOT treat as 英数/かな without external help (Karabiner). See
+# rmk-types-0.2.2/src/keycode.rs:283–284 for the RMK definitions.
+keymap = [
+    # Layer 0 — Mac / default (ZMK default_layer)
+    [
+        ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"],
+        ["A", "S", "D", "F", "G", "H", "J", "K", "L", "MT(Semicolon, LGui|LShift, FH)"],
+        ["Z", "X", "C", "V", "B", "N", "M", "Comma", "Dot", "MT(Slash, LGui|LCtrl, FH)"],
+        # Thumb row, layer 0. LEFT cols are reversed so keymap col 4 = /COL0 =
+        # XIAO直下 (innermost) and col 1 = /COL3 = outer edge; RIGHT cols are
+        # natural so col 5 = /COL0 = 直下 and col 8 = /COL3 = outer edge. cols 0
+        # and 9 are the v2 bottom pinky keys (/ROW3 x /COL4 on the main unit,
+        # the 4th key at the bottom of each pinky column): plain LShift /
+        # RShift. Per the user request the whole thumb cluster was shifted
+        # OUTWARD on both halves and the 直下 key on each half is now plain
+        # Backspace (previously the OUTER edge was Backspace):
+        #   LEFT  (XIAO直下 → 外側): BS, 英数/Shift, Ctrl, BS/Cmd
+        #   RIGHT (XIAO直下 → 外側): BS, Esc/Alt, Space/LT(2), Enter/LT(3)
+        # The 直下-adjacent LEFT thumb is MT(Language2, LShift): tap = 英数
+        # (Language2 = 英数 = English input on macOS JIS), hold = LShift — per
+        # the user's request to make this thumb Shift / English (was Language1
+        # = かな).
+        # NOTE: the momentary thumb overrides on layers 1/2/3 (英数↔かな pair,
+        # Win/Linux modifiers) still sit at their old columns and so no longer
+        # line up with these shifted base-layer thumbs — shift them too if that
+        # cross-layer alignment is wanted.
+        ["LShift", "LGui", "LCtrl", "MT(Language2, LShift, FH)", "Backspace", "Backspace", "MT(Escape, LAlt, FH)", "LT(2, Space, LTP)", "LT(3, Enter, LTP)", "RShift"],
+    ],
+    # Layer 1 — Win/Linux overlay (ZMK layer1)
+    [
+        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
+        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Semicolon, LCtrl|LShift, FH)"],
+        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Slash, LCtrl|LAlt, FH)"],
+        ["_", "_", "MT(Backspace, LAlt, FH)", "LT(5, LGui, LTP)", "_", "MT(Escape, LGui, FH)", "_", "_", "_", "_"],
+    ],
+    # Layer 2 — numbers / symbols (ZMK layer2)
+    [
+        ["Kc1", "Kc2", "Kc3", "Kc4", "Kc5", "Kc6", "Kc7", "Kc8", "Kc9", "Kc0"],
+        ["WM(Kc1, LShift)", "WM(Kc2, LShift)", "WM(Kc3, LShift)", "WM(Kc4, LShift)", "WM(Kc5, LShift)", "Left", "Down", "Up", "Right", "Semicolon"],
+        ["WM(Kc6, LShift)", "WM(Kc7, LShift)", "WM(Kc8, LShift)", "WM(Kc9, LShift)", "WM(Kc0, LShift)", "No", "No", "No", "No", "_"],
+        # Layer-2 language thumb = かな/Shift (Language1 = Japanese IME on). The
+        # SAME physical thumb on the base layer is 英数 (Language2, Layer 0 col3):
+        # so tap-on-base = English, hold-LT(2)+that-thumb = Japanese — per the
+        # user's request to split the two (base English / layer-2 Japanese).
+        ["_", "_", "_", "MT(Language1, LShift, FH)", "_", "_", "_", "_", "_", "_"],
+    ],
+    # Layer 3 — settings, media, BLE (ZMK layer3). Source &bt BT_SEL 0..3 →
+    # kobu User0..User3; source &bt BT_CLR → User6. BT_SEL 4 at pos 4 is
+    # dropped (kobu has only 4 BLE profiles — ble_profiles_num = 4). Source
+    # positions left as `&none` stay "No" to match the original keymap; the
+    # kobu User4/User5/User7 keycodes can be reattached via Vial.
+    [
+        ["User0", "User1", "User2", "User3", "No", "MediaPrevTrack", "MediaPlayPause", "MediaNextTrack", "AudioVolDown", "AudioVolUp"],
+        ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10"],
+        ["TO(0)", "TG(1)", "No", "No", "User6", "F11", "F12", "F13", "No", "_"],
+        ["_", "_", "_", "_", "_", "Delete", "_", "_", "_", "_"],
+    ],
+    # Layer 4 — mouse (ZMK layer4; trackball motion is separate). Per the
+    # user's request the LEFT hand and both thumbs are transparent (`_`) so
+    # they fall through to layer 0 — the left hand types normally while the
+    # right ball auto-activates this layer. Because a transparent layer-4
+    # fallthrough to a non-modifier stamps KOBU_LAST_TYPING_TICKS (via
+    # build.rs::patch_rmk_typing_tick), the first left-hand keystroke also
+    # drops the auto-mouse layer instantly. Only the RIGHT hand keeps mouse-
+    # layer bindings: the three mouse buttons, which resolve AT layer 4 and so
+    # never kill the layer (you can click while mousing). Source pos 7 of row 0
+    # is `mkp MB2` (apparent typo for MB3) — ported verbatim per "正確に実装".
+    # Removed when the left hand went transparent: the old Cmd+[ / Cmd+] tab-
+    # nav, TD(2) Shift, Tab + held-Cmd cmd-tab cluster, Ctrl, and Cmd+C/V.
+    # TD(2) in [behavior.morse] is now unreferenced.
+    [
+        ["_", "_", "_", "_", "_", "MouseBtn1", "MouseBtn2", "MouseBtn2", "MouseBtn3", "_"],
+        ["_", "_", "_", "_", "_", "No", "No", "No", "No", "_"],
+        ["_", "_", "_", "_", "_", "No", "No", "No", "No", "_"],
+        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
+    ],
+    # Layer 5 — Emacs (ZMK layer5)
+    [
+        ["WM(Q, LCtrl)", "WM(W, LCtrl)", "End", "WM(R, LCtrl)", "WM(T, LCtrl)", "WM(Y, LCtrl)", "WM(U, LCtrl)", "WM(I, LCtrl)", "WM(O, LCtrl)", "Up"],
+        ["TD(1)", "WM(S, LCtrl)", "Delete", "Right", "WM(G, LCtrl)", "Backspace", "WM(J, LCtrl)", "TD(0)", "WM(L, LCtrl)", "WM(Semicolon, LCtrl)"],
+        ["WM(Z, LCtrl)", "WM(X, LCtrl)", "WM(C, LCtrl)", "WM(V, LCtrl)", "Left", "Down", "WM(M, LCtrl)", "WM(Comma, LCtrl)", "WM(Dot, LCtrl)", "WM(Quote, LCtrl)"],
+        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
+    ],
+    # Layer 6 — Neovim (ZMK layer6)
+    [
+        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
+        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
+        ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
+        ["_", "_", "_", "LCtrl", "_", "_", "_", "_", "_", "_"],
+    ],
+]
+
+# Combos — ported 1:1 from ZMK `key-positions`, resolved to keycodes via the
+# source default_layer (RMK combos match on pressed keycodes, not on matrix
+# positions). Chord output uses base keycodes; Shift produces the natural
+# shifted symbol. The `:` ↔ `;` inversion lives on the HOST (the Mac's
+# Karabiner-Elements rule — see the [behavior.fork] note), NOT in firmware.
+[behavior.combo]
+timeout = "50ms"
+combos = [
+    { actions = ["Q", "W"], output = "Grave" },                          # combo_grave (pos 0,1)
+    { actions = ["A", "S"], output = "Tab" },                            # combo_tab (pos 10,11)
+    { actions = ["Y", "U"], output = "Backspace" },                      # combo_yu_bspc (pos 5,6)
+    { actions = ["U", "I"], output = "WM(Backslash, LShift)" },          # combo_pipe (pos 6,7) — emits `|` directly (forks removed)
+    { actions = ["I", "O"], output = "Minus" },                          # combo_minus (pos 7,8)
+    { actions = ["O", "P"], output = "Equal" },                          # combo_plus (pos 8,9)
+    { actions = ["J", "K"], output = "LeftBracket" },                    # combo_lbkt (pos 16,17)
+    { actions = ["K", "L"], output = "RightBracket" },                   # combo_rbkt (pos 17,18)
+    # combo_squote (pos 18,19). RMK combos match the keymap's FULL KeyAction
+    # (combo.rs: `a == *key_action`), NOT the bare keycode — spell out the
+    # exact MT action per layer (layer-0 Mac + layer-1 Win). This exact
+    # spelling was user-confirmed working at 7576fe7.
+    { actions = ["L", "MT(Semicolon, LGui|LShift, FH)"], output = "Quote" },
+    # (2026-06-12 #2) The Ctrl+英数 kana combo was REMOVED: the flow-tapped-
+    # space language rescue (build.rs::patch_rmk_flow_tapped_space_language_
+    # rescue) makes the natural Space+英数サム gesture work mid-streak, and
+    # combo-parking the 英数 thumb delayed that rescue by up to 50ms (the
+    # Backspace landed on the NEXT keypress instead of at the thumb).
+    { actions = ["L", "MT(Semicolon, LCtrl|LShift, FH)"], output = "Quote" },
+    { actions = ["N", "M"], output = "Backspace" },                      # combo_bspc (pos 25,26)
+    { actions = ["Comma", "Dot"], output = "Slash" },                    # combo_question (pos 27,28)
+    { actions = ["D", "F"], output = "WM(No, LGui|LAlt)", layer = 0 },   # combo_cmd_alt (pos 12,13, Mac)
+    { actions = ["D", "F"], output = "WM(No, LCtrl|LAlt)", layer = 1 },  # combo_ctrl_alt (pos 12,13, Win/Linux)
+    { actions = ["S", "D"], output = "TG(6)", layer = 1 },               # combo_neovim_toggle (pos 11,12, Win/Linux)
+    { actions = ["S", "D"], output = "TG(6)", layer = 6 },               # combo_neovim_toggle (pos 11,12, Neovim → back)
+]
+
+# Fork — stays EMPTY. The `:` ↔ `;` inversion is now NATIVE to the firmware
+# (2026-06-12 #3): build.rs::patch_rmk_colon_native_invert renders tap = ':'
+# (Shift+Semicolon, atomic) and Shift-chord = ';' (plain Semicolon with the
+# held Shift masked from that one report), resolved at the press edge by
+# patch_rmk_morse_shift_chord_instant_tap. The Mac's Karabiner "Exchange
+# semicolon and colon" rule was device-scoped to EXCLUDE kobu
+# (device_unless vendor 19279 / product 16985 in karabiner.json — backup at
+# karabiner.json.bak-20260612), so kobu now behaves identically on any host.
+# NOTE: forks = [] does NOT make stale Vial-written fork slots unreachable —
+# at boot rmk fill_vec-pads this list to capacity 8 BEFORE read_forks overlays
+# stored slots per index (rmk keymap.rs:49-53,94-96; host/storage.rs:245-265),
+# so try_start_forks' is_empty() early-out is dead at runtime. Two real
+# defenses instead: (1) the patched clearlayout ritual
+# (build.rs::patch_rmk_clearlayout_resync_vial_tables) rewrites all 8 fork
+# slots (plus combos/morses/macros) from this file; (2) the keymap is
+# fork-proof by shape — no position or combo output compiles to
+# Single(Key(Semicolon)) or Single(Key(Backslash)), so even an unsynced stale
+# trigger matches nothing (KeyAction PartialEq is variant-strict).
+[behavior.fork]
+forks = []
+
+[behavior.morse]
+# Flow Tap — DISABLED (2026-06-12 #3). Its last clients were the modifier MTs
+# (BS/Cmd, Esc/Alt), where it EATS chord intents: typing fast then Cmd+Enter
+# turned the Cmd thumb into an instant Backspace tap ("backspaceしてenter").
+# Every job flow tap once did is now covered better elsewhere: "git s"
+# ordering = balanced LTs + the follower-buffering patch; 変換 Space =
+# release-time tap; kana = press-edge patches. With flow tap off the modifier
+# thumbs are pure hold_on_other_press: press-and-chord = instant Cmd/Alt at
+# ANY typing speed; solo taps emit at release. (Accepted trade-off: rolling
+# THROUGH a modifier thumb mid-word can fire the modifier — these are outer
+# thumbs and the dedicated plain Backspace sits at the 直下 position.)
+# prior_idle_time stays: the kana press-edge patch reads it as its streak
+# window (build.rs::patch_rmk_kana_press_edge).
+enable_flow_tap = false
+prior_idle_time = "150ms"
+hold_on_other_press = true
+hold_timeout = "200ms"
+gap_timeout = "200ms"
+morses = [
+    { tap = "WM(K, LCtrl)", double_tap = "Macro(0)" },              # TD(0) = td_kill_line
+    { tap = "Home", double_tap = "WM(A, LCtrl)" },                  # TD(1) = td_home_ctla
+    { tap = "WM(LeftBracket, LGui)", hold = "LShift", profile = "FH" },  # TD(2) = mt LSHFT LG(LBKT) — was layer-4 left hand, now UNUSED (left hand went transparent); kept so TD(0)/TD(1) indices don't shift
+    # TD(3)/TD(4) REMOVED (2026-06-12 #2, the Karabiner discovery). Root cause
+    # of the :/; saga was OUTSIDE the firmware: this Mac runs Karabiner-Elements
+    # "Exchange semicolon and colon" (no device filter), so the screen shows the
+    # INVERSE of what the device sends — the TD tap WM(Semicolon, LShift)
+    # (device ':') rendered ';' and the layer-2 plain Semicolon rendered ':',
+    # both exactly swapped = era-F「治ってない」. The :/; key is back to
+    # MT(Semicolon, mods, FH): the device emits NORMAL US semantics and the
+    # user's own Karabiner rule does the swap, like the built-in keyboard.
+    # The Shift+key chord is made press-instant by
+    # build.rs::patch_rmk_morse_shift_chord_instant_tap (rmk otherwise emits
+    # morse taps at RELEASE time with that instant's modifiers — the era-P
+    # fast-chord failure); the ';' fallback is Space-layer + the same finger
+    # (layer-2 WM(Semicolon, LShift) = device ':' = OS ';').
+    # Also: the old TD holds WM(No, mods) could never chord — inner clears
+    # with_modifiers on every new key press (rmk keyboard.rs:804-807) — while
+    # MT holds are Action::Modifier (held_modifiers) and chord correctly.
+    # ⚠️ One clearlayout flash is REQUIRED after this change: the stored keymap
+    # still has TD(3)/TD(4) at the ;-positions, which now resolve to empty
+    # padded morse slots = a DEAD key until the ritual rewrites the keymap.
+]
+
+# `hold_timeout` = how long you hold an FH key (the LT layer-taps LT(2,Space)/
+# LT(3,Enter) and the MT mod-taps) before a standalone hold registers as the
+# hold action (layer / modifier). Bumped to 350 ms per the user: the layer was
+# activating too quickly on a deliberate long-press, so this makes "press →
+# layer active" clearly more deliberate (fewer accidental layer triggers).
+# Release still drops the layer instantly (momentary, no timeout). Because
+# `hold_on_other_press = true`, chording another key during the hold STILL
+# activates the layer/mod immediately — so normal layer use (hold thumb, press a
+# key) is unaffected; this longer timeout only governs the hold-ALONE timing.
+#
+# ⚠️ FLASH-STORED: hold_timeout/morse profiles are persisted to flash and
+# re-read at boot, and rmk-0.8.2's build-hash auto-invalidation is disabled, so
+# a PLAIN reflash keeps the OLD value. To apply this you MUST flash once with
+# [storage] clear_layout=true (central-clearlayout.uf2 — wipes the stored
+# keymap+behavior and rewrites from this file, KEEPS BLE bonds), then flash the
+# normal kobu2-rmk-central.uf2.
+[behavior.morse.profiles]
+# Round 27: matched to ZMK/KobitoKey's "tap-preferred" hold-tap flavor to fix the
+# "tap と hold が紛らわしい / 誤爆" feel. `hold_on_other_press = false` means pressing
+# another key during the hold window NO LONGER forces a hold — the thumb key only
+# becomes a hold (layer/mod) after `hold_timeout`, so a fast roll (thumb-tap then
+# next key) reliably yields the TAP instead of an accidental layer/modifier (the
+# ZMK tap-preferred behaviour the user finds smooth). Trade-off: to USE the layer
+# you now HOLD the thumb deliberately (~200ms) rather than quick-chording.
+# hold_timeout 350->200ms matched ZMK's tapping-term. Tuning: if resting a finger
+# on the thumb key falsely triggers the layer, raise hold_timeout toward 250-300ms.
+#
+# 2026-06-11: 200 -> 250ms (user-picked). At 200ms a deliberate-but-unhurried
+# Space tap (IME 変換) sometimes crossed the hold edge: no Space was emitted at
+# all (the key became a layer hold), so 変換されずに Enter → unconverted text.
+# +50ms keeps taps taps; the cost is layer/modifier engaging ~50ms later on a
+# deliberate hold-alone. ⚠️ FLASH-STORED (see the [behavior.morse] note above):
+# apply via one clearlayout flash, then the normal UF2.
+# ⚠️ rmk-macro 0.7.1 BUG (behavior.rs expand_profile): a mode flag set to
+# `false` compiles to mode=None = "inherit the [behavior.morse] default" — so
+# the old `hold_on_other_press = false` here was a silent NO-OP ever since R27
+# and every FH key actually ran in HoldOnOtherPress mode (inherited from the
+# top level). That is why rolled taps kept turning into holds ("git s" →
+# "git@", holdが早すぎる) no matter how hold_timeout was tuned. Only `= true`
+# flags actually select a mode; never write `= false` expecting an override.
+#
+# Design (2026-06-12, Flow Tap + hold-on-other-press):
+#   * typing streak (<150ms since last press)  → instant TAP  (flow tap above)
+#   * deliberate chord after an idle beat      → instant HOLD (no timeout wait
+#     for layers/modifiers — the "ホールド時間が長い" fix)
+#   * solo deliberate hold                     → 250ms (IME-変換 miss guard)
+FH = { hold_on_other_press = true, hold_timeout = "250ms", gap_timeout = "200ms" }
+# Option B (2026-06-12, user-picked): the layer-taps (Space/Enter/layer1-LGui)
+# move to KobitoKey-parity tap-preferred — hold ONLY via the 200ms timeout
+# (ZMK &lt semantics). Flow tap no longer applies to LTs
+# (build.rs::patch_rmk_flow_tap_exempt_layer_taps), and normal-mode followers
+# are BUFFERED for ordered output (build.rs::patch_rmk_normal_mode_buffering;
+# rmk otherwise emits the follower immediately and the deferred tap lands
+# after it — the parity-era "gits " bug). Net feel: 変換 Space emits at
+# RELEASE (KobitoKey feel, +50-80ms vs flow tap), Space+英数 mid-stream works
+# cleanly via the 200ms hold (no space typed, no Backspace rescue flicker),
+# numbers/layer chords engage after 200ms of deliberate hold.
+# 2026-06-12 #2: normal_mode (pure tap-preferred) made the kana switch wait
+# the full 200ms timeout — 「鬼遅い」. Balanced (permissive_hold) resolves the
+# hold the moment the FOLLOWER is pressed AND RELEASED while Space is held:
+# the Space+かなサム gesture (and Space+number chords) confirm at the
+# follower's own release ≈ instant, tracking the finger instead of a timer.
+# Solo taps still emit at release; rolls that release Space first still tap
+# (followers stay buffered & ordered). Residual trade-off (standard for ZMK
+# balanced): a follower pressed AND released entirely within a held Space
+# resolves the layer — a fully-nested ultra-fast roll could fire layer-2
+# (e.g. "@" instead of "s"); if that ever bites, drop hold_timeout instead.
+LTP = { permissive_hold = true, hold_timeout = "200ms", gap_timeout = "200ms" }
+
+[[behavior.macro.macros]]
+operations = [
+    { operation = "down", keycode = "LShift" },
+    { operation = "tap", keycode = "End" },
+    { operation = "up", keycode = "LShift" },
+    { operation = "delay", duration = "30ms" },
+    { operation = "tap", keycode = "Delete" },
+]
+
+[ble]
+enabled = true
+# nRF52840 max is 8 dBm. Stronger advertising helps Mac discover the keyboard
+# at the edge of the room; RMK's advertise path also requests +8 dBm.
+default_tx_power = 8
+# Battery sensing via XIAO nRF52840 BLE's internal voltage divider:
+#   BAT+ pad → R10 (1 MΩ) → P0_31 (AIN7_BAT) → R11 (510 kΩ) → P0_14.
+#   Reading P0_31 requires the divider path to be ENABLED, which is gated
+#   by P0_14 LOW (HIGH disables the path AND exposes P0_31 to up to 3.6V,
+#   risking damage). P0_14 is driven LOW by a persisted
+#   `[[split.*.output]]` declaration below for each half.
+#
+# Divider ratio is **R11 / (R10 + R11) = 510 / 1510 ≈ 0.338**, not 1/2 —
+# Seeed populates the XIAO BLE module with asymmetric resistors so the
+# nominal LiPo range 3.0–4.2 V lands within the SAADC's 0–3.6 V window
+# without the extra headroom 1M/1M would consume. Earlier kobu builds set
+# measured=1, total=2 (= 0.5) which underreads the actual battery voltage
+# by ~30 %: a fresh 4.0 V LiPo decodes as ~2.7 V, which the RMK formula
+# clamps to 0 % and lights the central LED red even on a healthy charge.
+# The values below match the XIAO BLE schematic measurement and let RMK's
+# get_battery_percent map a 4.0 V LiPo to ~80 %, 4.2 V to 100 %.
+battery_adc_pin = "P0_31"
+adc_divider_measured = 510
+adc_divider_total = 1510
+
+# Power / DCDC — MUST match the XIAO nRF52840 BLE power topology, which is
+# NORMAL voltage mode: VDD is tied to VDDH on the on-board 3.3 V rail and there
+# is NO inductor on the high-voltage REG0 (VDDH→VDD / DCCH) stage.
+#
+# The authoritative Zephyr board the working ZMK/KobitoKey firmware ships
+# (boards/seeed/xiao_ble/xiao_ble_common.dtsi) enables ONLY the second-stage
+# REG1 DCDC and leaves REG0 in LDO, and never programs UICR.REGOUT0:
+#     &reg0 { status = "okay"; };                              // REG0 stays LDO
+#     &reg1 { regulator-initial-mode = <NRF5X_REG_MODE_DCDC>; }; // REG1 = DCDC
+#
+# An EARLIER kobu build set dcdc_reg0=true (→ embassy POWER.DCDCEN0=true,
+# embassy-nrf-0.8 lib.rs:1079-1080) on a hunch that "DCDC helps RF". That drives
+# the high-voltage REG0 converter with no external LC filter / no VDDH>VDD
+# headroom, which per Nordic "renders the chip unusable" — a marginal, brownout-
+# prone CORE supply that takes the device down under +8 dBm TX current spikes.
+# Because it is the power rail (not BLE) it killed the keyboard on USB *and*
+# wireless and made power-on intermittent. Setting dcdc_reg0=false stops
+# DCDCEN0 from being enabled, leaving REG0 in LDO exactly like ZMK.
+#
+# NOTE on REGOUT0: rmk-macro 0.7.1 chip_init.rs:64,76 ALWAYS emits
+# config.dcdc.reg0_voltage = Some(_3V3) for nrf52840 (it defaults the missing
+# key to "3V3"), so we cannot make it None from this file. That is harmless:
+# embassy only writes UICR.REGOUT0 + sys_reset() when the value CHANGES, and a
+# prior build already programmed REGOUT0=3V3, so it is now a no-op. In NORMAL
+# voltage mode (VDDH=VDD, DCDCEN0 off) REGOUT0 is not in the supply path anyway
+# — ZMK leaves it at the erased default and works for the same reason.
+[chip.nrf52840]
+dcdc_reg0 = false
+dcdc_reg1 = true
+
+[split]
+connection = "ble"
+
+# Left half = central. Keys occupy cols 0..4 of the unified 4x10 layout.
+[split.central]
+rows = 4
+cols = 5
+row_offset = 0
+col_offset = 0
+
+[split.central.matrix]
+row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
+# Reverse order on the left half: keymap col 0 must be the outer pinky
+# (Q / A / Z column), which is wired to /COL4 = P0.10. col_pins[4] then
+# drives the inner-index column (/COL0 = P1.12 = T / G / B). This
+# matches the canonical QWERTY layout under the unified 4x10 keymap.
+# Right half stays natural (col 0 = inner Y) plus col_offset = 5.
+col_pins = ["P0_10", "P1_15", "P1_14", "P1_13", "P1_12"]
+row2col = true  # drive /ROW high, read /COL — required for per-silkscreen diodes (anode on /ROW)
+
+# Battery-sense enable for the central half: P0_14 must be driven LOW
+# permanently so the on-module BAT divider feeds P0_31 (see `[ble]` notes).
+# With low_active = false and initial_state_active = false, the persisted
+# output sits at Level::Low at boot and is never touched again.
+# The XIAO's onboard R/G/B LED pins (P0_26 / P0_30 / P0_06) are NOT declared
+# here as static outputs — `src/battery_led.rs` claims and animates them
+# dynamically based on battery percentage.
+[[split.central.output]]
+pin = "P0_14"
+low_active = false
+initial_state_active = false
+
+# LEFT-board trackball (PMW3610). Sits on the central MCU (= left half).
+# Pin mapping is documented at the top of this file:
+#   D0  P0_02 = SDIO  (shared MOSI/MISO bit-banged on a single line)
+#   D1  P0_03 = SCLK
+#   D2  P0_28 = MOTION (active-low IRQ) — INTENTIONALLY UNCONFIGURED below
+#                so the driver polls continuously rather than gating reads on
+#                the MOTION pin. Keeps the trackball alive even if MOTION
+#                wiring/polarity is wrong, at the cost of always-on polling.
+#   NFC1 P0_09 = NCS  (chip select)
+# Uses the default Pmw3610Processor (emits MouseReport x/y) via the
+# auto-generated entry — no custom processor or override.
+[[split.central.input_device.pmw3610]]
+name = "left"
+cpi = 600
+force_awake = true
+# kobu: match ZMK CONFIG_PMW3610_SMART_ALGORITHM=y (set on BOTH halves in
+# KobitoKey). Datasheet surface-tracking quality — read_motion toggles reg 0x32
+# on the SHUTTER threshold so tracking stays reliable on glossy/marginal
+# surfaces (fewer count dropouts that would read as micro-もっさり). Report
+# cadence unaffected; cost is a few SPI bytes + an occasional reg write.
+smart_mode = true
+
+[split.central.input_device.pmw3610.spi]
+instance = ""
+sck = "P0_03"
+mosi = "P0_02"
+miso = ""
+cs = "P0_09"
+
+# Right half = peripheral 0. Keys occupy cols 5..9.
+[[split.peripheral]]
+rows = 4
+cols = 5
+row_offset = 0
+col_offset = 5
+
+[split.peripheral.matrix]
+row_pins = ["P0_29", "P0_04", "P0_05", "P1_11"]
+# Natural order: keymap col 5 (= central col 0 + col_offset) = inner index
+# = COL0 wire = P1.12; keymap col 9 = pinky = COL4 wire = P0.10.
+col_pins = ["P1_12", "P1_13", "P1_14", "P1_15", "P0_10"]
+row2col = true  # drive /ROW high, read /COL — required for per-silkscreen diodes (anode on /ROW)
+
+# The XIAO onboard R/G/B LED pins (P0_26 / P0_30 / P0_06) are NOT declared as
+# static outputs here — `src/peripheral_led.rs` claims and animates them
+# dynamically (boot battery colour → blue when connected → off; red on central
+# disconnect), mirroring the central's `src/status_led.rs`. Leaving P0_30
+# undeclared keeps it owned by the macro's `p` so the controller can claim it.
+# The P0_14 battery-sense enable output below MUST stay (it gates the BAT
+# divider feeding the ADC).
+
+# Battery-sense enable for the peripheral half (see central side notes).
+[[split.peripheral.output]]
+pin = "P0_14"
+low_active = false
+initial_state_active = false
+
+# RIGHT-board trackball (PMW3610). Sits on the peripheral MCU.
+# Same pin map as the LEFT side — both XIAO boards are identical hardware.
+# Like the LEFT side, MOTION is intentionally not configured (driver polls
+# continuously) and force_awake disables power-saving.
+#
+# The peripheral emits Joystick(X,Y,_) events that are forwarded as
+# SplitMessage::Event to the central. The central's processor chain in
+# `src/central.rs` routes those untouched-X/Y events to PointerProcessor
+# (= mouse motion), while central-local events are relabeled X→H, Y→V by
+# AxisRelabel so they reach ScrollProcessor instead. See
+# `src/trackball.rs`.
+[[split.peripheral.input_device.pmw3610]]
+name = "right"
+cpi = 600
+force_awake = true
+# kobu: match ZMK CONFIG_PMW3610_SMART_ALGORITHM=y — this is the POINTER half
+# (the right ball), the exact ball ZMK runs the smart algorithm on. See the
+# left-half note above for the mechanism.
+smart_mode = true
+
+[split.peripheral.input_device.pmw3610.spi]
+instance = ""
+sck = "P0_03"
+mosi = "P0_02"
+miso = ""
+cs = "P0_09"
+
+[rmk]
+split_peripherals_num = 1
+ble_profiles_num = 4
+combo_max_num = 18
+morse_max_num = 6
+macro_space_size = 256
+fork_max_num = 8
+
+# Vial / Web keymap editor wiring.
+# Vial speaks USB Raw HID (vendor usage page 0xFF60), so it's only reachable
+# when central is plugged in via USB. BLE-only sessions cannot edit keymap.
+# See README "Vial usage" section and tracking issue #12 for upstream BLE
+# editor support.
+[host]
+# `vial_enabled` defaults to true in RMK 0.8 but is declared explicitly so a
+# future default change can't silently disable Vial.
+vial_enabled = true
+# Physical (row, col) chord required to authorize keymap mutations from Vial.
+# LEFT col_pins are reversed, so keymap col 0 = /COL4 wire = physical outer
+# pinky on the LEFT half (= Q key). RIGHT col_pins are natural, so col 9 =
+# /COL4 wire = physical outer pinky on the RIGHT half (= P key). Pressing
+# both outer-pinkies simultaneously is virtually impossible during normal
+# typing, which keeps Vial locked unless explicitly invoked.
+#
+# These are MATRIX positions in the 4x10 unified layout, NOT logical
+# keycodes — relabeling Q or P in Vial does not change the unlock chord.
+unlock_keys = [[0, 0], [0, 9]]
+
+# Persistent flash storage for keymap, bonds, and Vial state.
+#
+# RMK 0.8's nrf52840 default places storage at 0xA0000..0xC0000 (128 KiB).
+# We pin both fields explicitly so a default change upstream cannot move
+# our region under us and orphan existing flash data.
+#
+# Flash layout (matches `memory.x` — keep in sync if either side changes):
+#   0x000000..0x001000 (   4 KiB)  MBR
+#   0x001000..0x0A0000 ( 636 KiB)  app code (linker-managed, declared in memory.x)
+#   0x0A0000..0x0C0000 ( 128 KiB)  RMK storage (this section)
+#   0x0C0000..0x0F4000 ( 208 KiB)  unused / bootloader settings
+#   0x0F4000..0x100000 (  48 KiB)  Adafruit UF2 bootloader
+#
+# `clear_layout` and `clear_storage` stay false in normal builds. To
+# factory-reset keymap (preserving BLE bonds) flip clear_layout=true,
+# flash once, then flip back. To wipe bonds too use clear_storage=true.
+#
+# If macOS still does not list "kobu2" after flashing this firmware, an
+# older build may have stored USB-priority in flash (RMK #157). Either
+# press Layer-3 "Switch Output" once while on USB, or flash once with
+# clear_storage=true (wipes bonds) then set it back to false.
+[storage]
+enabled = true
+start_addr = 0xA0000
+num_sectors = 32
+clear_layout = false
+clear_storage = false
