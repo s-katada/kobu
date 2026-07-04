@@ -1,15 +1,17 @@
 name: Firmware (RMK + ZMK)
 
-# Builds BOTH firmwares for kobu in clearly-separated jobs so the Actions UI
+# Builds ALL firmwares for kobu in clearly-separated jobs so the Actions UI
 # plainly shows which is which:
-#   * build-rmk  — the RMK (Rust/Vial) firmware  → kobu-rmk-central/peripheral(+-reset).uf2
-#   * build-zmk  — the ZMK (zmk-nix) firmware    → kobu-zmk-left/right/reset.uf2
-#   * release    — publishes BOTH to the rolling `firmware-latest` pre-release
+#   * build-rmk     — the v1 RMK (Rust/Vial) firmware → kobu-rmk-central/peripheral(+-reset).uf2
+#   * build-rmk-v2  — the v2 RMK firmware ("kobu2")   → kobu2-rmk-central/peripheral(+-reset).uf2
+#   * build-zmk     — the ZMK (zmk-nix) firmware      → kobu-zmk-left/right/reset.uf2
+#   * release       — publishes ALL to the rolling `firmware-latest` pre-release
 # The web editors consume this: the RMK (Vial) editor installs the RMK assets,
 # the ZMK editor installs the ZMK assets, and the ZMK editor's "detailed
 # settings" feature dispatches THIS workflow (by filename) with overrides — a
-# custom build tweaks ZMK config only, so it runs build-zmk ALONE (build-rmk is
-# skipped) and the run then carries a single zmk artifact for the editor to fetch.
+# custom build tweaks ZMK config only, so it runs build-zmk ALONE (both RMK
+# jobs are skipped) and the run then carries a single zmk artifact for the
+# editor to fetch.
 
 # Custom (web-app) builds set `build_id`; echo it into the run name so the
 # ZMK editor's Worker can locate this run when polling (it matches on build_id).
@@ -21,6 +23,7 @@ on:
     paths:
       - "v1/firmware/rmk/**"
       - "v1/firmware/zmk/**"
+      - "v2/firmware/rmk/**"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/firmware.yml"
@@ -28,6 +31,7 @@ on:
     paths:
       - "v1/firmware/rmk/**"
       - "v1/firmware/zmk/**"
+      - "v2/firmware/rmk/**"
       - "flake.nix"
       - "flake.lock"
       - ".github/workflows/firmware.yml"
@@ -135,6 +139,78 @@ jobs:
             v1/firmware/rmk/kobu-rmk-peripheral-reset.uf2
           if-no-files-found: error
 
+  # ── RMK v2 firmware (v2/firmware/rmk, Rust) ───────────────────────────────
+  # Same recipe as build-rmk against the v2 tree ("kobu2": +1 bottom pinky key
+  # per half on the previously free ROW3 x COL4 intersection, product_id
+  # 0x425A). v2's build.rs is kept byte-identical to v1's — both patch the
+  # same registry sources in place — so the throwaway-build/clean/rebuild
+  # dance below stays correct for either job running on a pristine registry.
+  build-rmk-v2:
+    name: Build RMK v2 firmware (Rust / Vial)
+    # Custom (web-app override) builds tweak ZMK config only — skip, like build-rmk.
+    if: ${{ inputs.overrides_b64 == '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Cache cargo target and installed binaries
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: v2/firmware/rmk -> target
+          # Same cache-busting rationale as build-rmk: hash the v2 patch set.
+          key: ${{ hashFiles('flake.lock', 'v2/firmware/rmk/build.rs', 'v2/firmware/rmk/keyboard.toml') }}
+
+      - name: Install cargo-hex-to-uf2
+        run: nix develop .#firmware --command cargo install --locked cargo-hex-to-uf2
+
+      - name: Build RMK v2 central and peripheral
+        run: |
+          nix develop .#firmware --command bash -eux <<'EOF'
+          cd v2/firmware/rmk
+          # See build-rmk for why: throwaway build applies the (idempotent)
+          # registry patches, then all three patched crates are recompiled
+          # from the patched sources before the real build.
+          cargo build --release --bin central || true
+          cargo clean --release -p rmk -p trouble-host -p rmk-macro
+          cargo build --release --bin central
+          cargo build --release --bin peripheral
+          cargo objcopy --release --bin central    -- -O ihex central.hex
+          cargo objcopy --release --bin peripheral -- -O ihex peripheral.hex
+          cargo hex-to-uf2 --input-path central.hex    --output-path kobu2-rmk-central.uf2    --family nrf52840
+          cargo hex-to-uf2 --input-path peripheral.hex --output-path kobu2-rmk-peripheral.uf2 --family nrf52840
+          EOF
+
+      # clear_layout = true variants — same ritual as build-rmk's factory-reset step.
+      - name: Build RMK v2 factory-reset central and peripheral
+        run: |
+          nix develop .#firmware --command bash -eux <<'EOF'
+          cd v2/firmware/rmk
+          sed -i 's/^clear_layout = false$/clear_layout = true/' keyboard.toml
+          grep -q '^clear_layout = true$' keyboard.toml
+          touch src/central.rs src/peripheral.rs
+          cargo build --release --bin central
+          cargo build --release --bin peripheral
+          cargo objcopy --release --bin central    -- -O ihex central-reset.hex
+          cargo objcopy --release --bin peripheral -- -O ihex peripheral-reset.hex
+          cargo hex-to-uf2 --input-path central-reset.hex    --output-path kobu2-rmk-central-reset.uf2    --family nrf52840
+          cargo hex-to-uf2 --input-path peripheral-reset.hex --output-path kobu2-rmk-peripheral-reset.uf2 --family nrf52840
+          sed -i 's/^clear_layout = true$/clear_layout = false/' keyboard.toml
+          EOF
+
+      - name: Upload RMK v2 firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kobu-firmware-rmk-v2
+          path: |
+            v2/firmware/rmk/kobu2-rmk-central.uf2
+            v2/firmware/rmk/kobu2-rmk-peripheral.uf2
+            v2/firmware/rmk/kobu2-rmk-central-reset.uf2
+            v2/firmware/rmk/kobu2-rmk-peripheral-reset.uf2
+          if-no-files-found: error
+
   # ── ZMK firmware (v1/firmware/zmk, zmk-nix) ───────────────────────────────
   # Produces kobu-zmk-left.uf2 (central + Studio), kobu-zmk-right.uf2 (peripheral)
   # and kobu-zmk-reset.uf2 (settings_reset). Runs on every event — including
@@ -178,15 +254,15 @@ jobs:
             zmk-out/kobu-zmk-reset.uf2
           if-no-files-found: error
 
-  # ── Publish the rolling firmware-latest pre-release (RMK + ZMK) ───────────
+  # ── Publish the rolling firmware-latest pre-release (RMK v1/v2 + ZMK) ─────
   # Only on normal main builds — NOT on PRs and NOT on custom (overrides) builds
   # (the web app fetches a custom build's UF2 from the run artifact instead, so
-  # it must not overwrite the rolling release). build-rmk is skipped on custom
-  # builds, so this `needs`-gated job is skipped there too — consistent with the
-  # `if` below.
+  # it must not overwrite the rolling release). Both RMK jobs are skipped on
+  # custom builds, so this `needs`-gated job is skipped there too — consistent
+  # with the `if` below.
   release:
     name: Publish firmware-latest pre-release
-    needs: [build-rmk, build-zmk]
+    needs: [build-rmk, build-rmk-v2, build-zmk]
     if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && inputs.overrides_b64 == '' }}
     runs-on: ubuntu-latest
     steps:
@@ -209,9 +285,9 @@ jobs:
           # kobu-zmk-left.uf2, …) the web editors fetch are preserved regardless
           # of the artifacts' internal directory layout.
           mapfile -t UF2S < <(find dist -name '*.uf2' | sort)
-          test "${#UF2S[@]}" -eq 7  # 4 RMK + 3 ZMK; fail loudly if a build dropped one
+          test "${#UF2S[@]}" -eq 11  # 4 RMK v1 + 4 RMK v2 + 3 ZMK; fail loudly if a build dropped one
           NOTES=$(cat <<NOTE
-          自動ビルドされた最新版です（RMK / ZMK 両ファームウェア）。
+          自動ビルドされた最新版です（RMK v1 / RMK v2 (kobu2) / ZMK ファームウェア）。
 
           - Commit: \`${{ github.sha }}\`
           - Built:  ${DATE_UTC}
@@ -226,6 +302,12 @@ jobs:
           \`kobu-rmk-peripheral-reset.uf2\` を一度焼くと次回起動時に storage の keymap
           がクリアされます。続けて通常版を焼き直すとリリース時点のキーマップ +
           ペアリング情報維持の状態になります (詳細は kobu-editor の「クリーンインストール」ボタン)。
+
+          ## RMK v2 ファームウェア（kobu2）
+          v2 ハード（小指列最下段 +1 キー/半分、計 40 キー）用。
+          \`kobu2-rmk-central.uf2\` / \`kobu2-rmk-peripheral.uf2\` を v1 と同じ手順で
+          書き込み。工場出荷リセットは \`kobu2-rmk-central-reset.uf2\` /
+          \`kobu2-rmk-peripheral-reset.uf2\`。v1 ハードには v1 用 UF2 を使うこと。
 
           ## ZMK ファームウェア（移植版）
           \`kobu-zmk-left.uf2\` = 左 (central, ZMK Studio 対応) /
