@@ -488,7 +488,7 @@
     "pinned_symbol_libs": []
   },
   "meta": {
-    "filename": "left-main.kicad_pro",
+    "filename": "right-main.kicad_pro",
     "version": 3
   },
   "net_settings": {
@@ -651,8 +651,8 @@
     "subpart_id_separator": 0,
     "top_level_sheets": [
       {
-        "filename": "left-main.kicad_sch",
-        "name": "left-main",
+        "filename": "right-main.kicad_sch",
+        "name": "right-main",
         "uuid": "00000000-0000-0000-0000-000000000000"
       }
     ],
