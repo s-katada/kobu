@@ -1064,7 +1064,15 @@ pub async fn run_input_gate_central() {
     // less flood than the 2 ms that caused the wedge), so 1 s here is safer than
     // 2 s was at 500 Hz. If a stale-reconnect-while-moving wedge ever recurs,
     // raise back toward 1500-2000.
-    const SETTLE_MS: u64 = 1000;
+    //
+    // kobu: lowered 1000 -> 300 (2026-07-13): Mac-side log measured HID fully
+    // attached at ~1.1 s after connect and the GATT burst finishing by ~1.2 s;
+    // 300 ms past the (now params-update-latched) host_connected still clears
+    // the burst, while the R10 wedge defenses that actually matter (8 ms poll =
+    // 4x less flood, doubled TX pool/queue, bounded reply.send, timeout-bounded
+    // split writes) are all still in place. Revert toward 1000-2000 if a
+    // stale-reconnect-while-moving wedge ever recurs.
+    const SETTLE_MS: u64 = 300;
     // Backstop for a session with NO host at all (no BLE + no USB) so the balls
     // aren't dead forever. Far longer than any real connect+settle, so it never
     // pre-empts the settle path during the dangerous bring-up window.

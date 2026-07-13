@@ -70,6 +70,12 @@ fn main() {
     patch_rmk_kobu_input_gate_atomics();
     patch_rmk_timeout_peripheral_event_write();
     patch_rmk_pmw3610_input_gate();
+    // PMW3610 boot-lottery fix: the stock driver gives up after 3 init
+    // attempts (~300 ms) and parks dead until power-cycle, and treats a
+    // flaky-SPI all-0xff burst read as a real (phantom) motion sample.
+    // Retry init forever (fast then relaxed backoff) and reject 0xff frames.
+    patch_rmk_pmw3610_init_retry_forever();
+    patch_rmk_pmw3610_reject_ff_frame();
     patch_rmk_split_host_ready_variant();
     patch_rmk_emit_host_ready();
     patch_rmk_peripheral_apply_host_ready();
@@ -162,6 +168,11 @@ fn main() {
     // (and no later ble/mod.rs patch may come between them, keeping the
     // appended marker order — and therefore the file bytes — exact).
     patch_rmk_host_conn_refresh_r25();
+    // Fast bring-up (2026-07-13): latch KOBU_HOST_CONNECTED on the
+    // ConnectionParamsUpdated arm (encrypted-link check inline) instead of
+    // waiting on a GATT READ a cache-warm bonded reconnect may send late or
+    // never. Must be the LAST ble/mod.rs patch (anchors on round-11 text).
+    patch_rmk_host_connected_on_params_update();
 
     // Round 26 — pointer のろのろ TRUE ROOT CAUSE = the i8 (±127) mouse report.
     // RMK's mouse HID report is i8 x/y and kobu emits ONE report per BLE
@@ -227,8 +238,18 @@ fn main() {
     patch_rmk_flow_tap_exempt_layer_taps();
     patch_rmk_normal_mode_buffering();
     patch_rmk_kana_press_edge();
+    // D+F combo → WM(No, ⌘⌥) chord fix: rmk's anti-leak clear kills any
+    // pure modifier hold on the next keypress, so ⌘⌥+Space never chorded.
+    // Flag pure holds (KeyCode::No) and skip the clear while one is active.
+    patch_rmk_pure_wm_hold_chord();
     patch_rmk_enter_chord_press_edge();
     patch_rmk_clearlayout_resync_vial_tables();
+    // Fast bring-up (round 4): give Storage a shared KeyPointerCache so boot
+    // reads stop doing 300+ NoCache full-map linear scans once the map is
+    // dirty with months of Vial/settings/bond appends (storage-wipe test
+    // confirmed this is the dominant remaining boot cost). Must run after
+    // clearlayout_resync_vial_tables (anchors on its reset_layout_only tail).
+    patch_rmk_storage_boot_cache();
     // クリック救済 (2026-06-12) — "ほぼ静止しないとクリックできない / 微調整中に
     // レイヤーが切れる". Inject KOBU_LAST_TYPING_TICKS + KOBU_AUTO_MOUSE_LAYER
     // and stamp the typing tick in KeyMap::get_action_with_layer_cache when a
@@ -3379,6 +3400,132 @@ fn patch_rmk_pmw3610_input_gate() {
     });
 }
 
+/// The PMW3610's 3-wire shared-SDIO SPI link is empirically flaky at
+/// power-up (reads return 0xff until the line settles; the ZMK port of this
+/// same hardware needed up to ~100 init retries to ride this out). Stock
+/// `try_init` gives up after 3 attempts (~300 ms) and parks in
+/// `InitState::Failed` forever, so losing that boot lottery left the ball
+/// dead until the next power cycle. Retry forever instead: 100 ms cadence
+/// for the first 10 attempts, then a relaxed 1 s cadence so a genuinely
+/// absent sensor costs ~nothing.
+fn patch_rmk_pmw3610_init_retry_forever() {
+    const MARKER: &str = "// kobu: PMW3610 init retry-forever applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/input_device/pmw3610.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} input_device/pmw3610.rs; \
+             PMW3610 init-retry-forever patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"                Err(_e) => {
+                    error!("PMW3610: Init failed: {:?}", _e);
+                    if retry_count + 1 >= Self::MAX_INIT_RETRIES {
+                        error!("PMW3610: Max retries reached, giving up");
+                        self.init_state = InitState::Failed;
+                        return false;
+                    }
+                    self.init_state = InitState::Initializing(retry_count + 1);
+                    Timer::after(Duration::from_millis(100)).await;
+                    return false;
+                }"#;
+    let to = r#"                Err(_e) => {
+                    error!("PMW3610: Init failed: {:?}", _e);
+                    // kobu: NEVER park in InitState::Failed. This sensor's 3-wire
+                    // shared-SDIO link is empirically flaky at power-up (the ZMK
+                    // port of the same hardware saw reads return 0xFF until the
+                    // line settles and needed up to ~100 retries); 3 attempts in
+                    // ~300 ms was a boot lottery — losing it left the ball dead
+                    // until the next power cycle. Retry forever: 100 ms cadence
+                    // for the first 10 attempts, then a relaxed 1 s cadence so a
+                    // genuinely absent sensor costs ~nothing.
+                    let next = retry_count.saturating_add(1);
+                    self.init_state = InitState::Initializing(next);
+                    let backoff_ms: u64 = if next < 10 { 100 } else { 1000 };
+                    Timer::after(Duration::from_millis(backoff_ms)).await;
+                    return false;
+                }"#;
+
+    if !contents.contains(from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} pmw3610.rs try_init Err-branch anchor missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_pmw3610_init_retry_forever",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Companion to the retry-forever patch above: an all-0xff burst-read frame
+/// is that same flaky-SPI idle-high read, not a real motion report — left
+/// unchecked it decodes as a phantom dx=dy=-1 creep (ghost scroll). Reject it
+/// exactly like the ZMK port of this hardware does.
+fn patch_rmk_pmw3610_reject_ff_frame() {
+    const MARKER: &str = "// kobu: PMW3610 0xff burst-frame reject applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/input_device/pmw3610.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} input_device/pmw3610.rs; \
+             PMW3610 0xff burst-frame reject patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"        if (burst_data[BURST_MOTION] & MOTION_STATUS_MOTION) == 0x00 {
+            return Ok(MotionData::default());
+        }"#;
+    let to = r#"        if burst_data[BURST_MOTION] == 0xff {
+            // kobu: an all-1s frame is a flaky 3-wire SDIO idle-high read, not a
+            // real motion report — it would decode as a phantom dx=dy=-1 creep
+            // (ghost scroll). Same rejection the ZMK port shipped for this exact
+            // hardware.
+            return Ok(MotionData::default());
+        }
+        if (burst_data[BURST_MOTION] & MOTION_STATUS_MOTION) == 0x00 {
+            return Ok(MotionData::default());
+        }"#;
+
+    if !contents.contains(from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} pmw3610.rs read_motion MOTION_STATUS_MOTION anchor missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_pmw3610_reject_ff_frame",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
 /// Round 8 / Layer B3: add `SplitMessage::HostReady(bool)` — the REAL host-link
 /// state (BLE-encrypted OR USB), central->peripheral. Distinct from
 /// ConnectionState, which the peripheral force-sets Connected the instant the
@@ -4509,6 +4656,73 @@ fn patch_rmk_host_conn_refresh_r25() {
         panic!("kobu: failed to write {}: {e}", path.display());
     });
 }
+
+/// Fast bring-up (2026-07-13): `patch_rmk_set_host_connected` latches
+/// KOBU_HOST_CONNECTED on PairingComplete (fresh pairing only) or the first
+/// encrypted GATT READ — but a bonded macOS reconnect can serve GATT from
+/// cache, so the READ signal fires late (measured ~0.9s after connect) or in
+/// principle never. macOS ALWAYS renegotiates connection parameters right
+/// after encryption (measured +0.55s; kobu's own set_conn_params request at
+/// +300ms guarantees one), so the ConnectionParamsUpdated arm is a reliable,
+/// earlier "bonded reconnect is fully up" signal. Anchors on the round-11
+/// patched text from patch_rmk_reassert_fast_conn_params, so this MUST run
+/// after every ble/mod.rs patch that touches the ConnectionParamsUpdated arm
+/// (i.e. last among the ble/mod.rs patches).
+fn patch_rmk_host_connected_on_params_update() {
+    const MARKER: &str = "// kobu: host-connected latch on params-update applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/ble/mod.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} ble/mod.rs; \
+             host-connected-on-params-update patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"                // kobu: remember the live host interval so set_conn_params can
+                // re-assert fast params only when macOS has drifted us slow.
+                crate::input_device::battery::KOBU_HOST_CONN_INTERVAL_US
+                    .store(conn_interval.as_micros() as u32, core::sync::atomic::Ordering::Relaxed);"#;
+    let to = r#"                // kobu: remember the live host interval so set_conn_params can
+                // re-assert fast params only when macOS has drifted us slow.
+                crate::input_device::battery::KOBU_HOST_CONN_INTERVAL_US
+                    .store(conn_interval.as_micros() as u32, core::sync::atomic::Ordering::Relaxed);
+                // kobu (fast bring-up): a params-update on an ENCRYPTED link is
+                // macOS's reliable "bonded reconnect is fully up" tell (it always
+                // renegotiates params right after encryption; kobu's own 300 ms
+                // set_conn_params request guarantees one). Latch host-connected
+                // here so the input gate / auto-mouse / peripheral HostReady do
+                // not have to wait for a GATT READ that a cache-warm macOS may
+                // send late or never.
+                if conn.raw().security_level().map(|l| l.encrypted()).unwrap_or(false) {
+                    crate::input_device::battery::KOBU_HOST_CONNECTED.store(true, Ordering::Release);
+                }"#;
+
+    if !contents.contains(from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} ble/mod.rs ConnectionParamsUpdated store anchor missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_host_connected_on_params_update",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
 /// step5c — give the SPLIT link real connection-event bandwidth (CE length
 /// extension). trouble's `ConnectParams::default()` leaves min/max_event_length
 /// at 0, and `defaul_central_conn_param()` inherits that via `..Default::
@@ -5121,6 +5335,261 @@ fn patch_rmk_clearlayout_resync_vial_tables() {
         panic!("kobu: failed to write {}: {e}", path.display());
     });
 }
+
+/// Fast bring-up (round 4, 2026-07-13): the storage-wipe test proved rmk's
+/// boot-time reads (300+ `fetch_item` calls for keymap/combo/fork/morse/macro
+/// items, each a stock `NoCache` full-map linear scan) are the dominant boot
+/// cost once the sequential-storage map has months of Vial/settings/bond
+/// appends in it — a fresh map is fast, kobu's dirty map was not. Fix: give
+/// `Storage` a persistent `sequential_storage::cache::KeyPointerCache<32,
+/// u32, 384>` field (32 = our configured sector count, 384 > the ~280
+/// keymap keys + ~40 vial/config/bond items we actually store) and route
+/// EVERY fetch/store on this Storage's flash range through it instead of a
+/// fresh `NoCache::new()` per call.
+///
+/// Correctness invariant (sequential-storage's own contract): a cache is only
+/// valid if EVERY operation on the same flash range goes through the SAME
+/// cache instance — a write that bypasses the cache leaves stale key
+/// pointers, which then serves WRONG reads later. Storing the cache as a
+/// `Storage` struct field (rather than a loose local) makes this structural:
+/// its lifetime is tied 1:1 to the one long-lived `Storage` instance, which
+/// is never cloned or duplicated (no `Clone` impl, no other constructor).
+/// Every call site was individually audited:
+///   - the ONE struct-literal construction site (in `new`, using the local
+///     `storage` binding — `self` doesn't exist yet in an associated fn);
+///   - `run`'s per-task-loop `storage_cache` local (19 call sites across
+///     every FlashOperationMessage arm, including the ones behind
+///     `#[cfg(feature = "_ble")]` / `"host"` — text-level patch, so cfg
+///     gating doesn't hide sites from the string replace);
+///   - `initialize_storage_with_config` and `reset_layout_only`'s two
+///     same-named `cache` locals (13 call sites total, including the
+///     kobu-injected clearlayout-resync tail in `reset_layout_only`, which
+///     reuses that same local — no separate declaration to track);
+///   - five direct `&mut NoCache::new()` methods with no named local
+///     (`read_behavior_config`, `check_enable`, `read_trouble_bond_info`,
+///     `read_peer_address`, `write_peer_address`);
+///   - the exported `read_storage!` macro, whose only two call sites in the
+///     whole crate (`ble/mod.rs`, `ble/profile.rs`) both pass a
+///     `&mut Storage<...>` reference as `$storage`, so `$storage.cache`
+///     auto-derefs to the exact same shared instance.
+/// That accounts for all 10 pristine `NoCache::new()` sites in the file; a
+/// final in-patch assertion re-confirms zero remain. MUST run after
+/// `patch_rmk_clearlayout_resync_vial_tables` (it anchors on that patch's
+/// `reset_layout_only` tail, which reuses the same `cache` local it edits).
+fn patch_rmk_storage_boot_cache() {
+    const MARKER: &str = "// kobu: storage shared KeyPointerCache applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/storage/mod.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} storage/mod.rs; \
+             storage boot-cache patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    // (1) add the cache field to the struct.
+    let struct_from = r#"pub struct Storage<
+    F: AsyncNorFlash,
+    const ROW: usize,
+    const COL: usize,
+    const NUM_LAYER: usize,
+    const NUM_ENCODER: usize = 0,
+> {
+    pub(crate) flash: F,
+    pub(crate) storage_range: Range<u32>,
+    pub(crate) buffer: [u8; get_buffer_size()],
+}"#;
+    let struct_to = r#"pub struct Storage<
+    F: AsyncNorFlash,
+    const ROW: usize,
+    const COL: usize,
+    const NUM_LAYER: usize,
+    const NUM_ENCODER: usize = 0,
+> {
+    pub(crate) flash: F,
+    pub(crate) storage_range: Range<u32>,
+    pub(crate) buffer: [u8; get_buffer_size()],
+    // kobu (fast bring-up, round 4): shared key-pointer cache so every
+    // fetch/store on this Storage's flash range gets an in-RAM shortcut
+    // instead of a fresh NoCache full-map linear scan per call. Lives
+    // exactly as long as the Storage instance, which is the correctness
+    // invariant sequential-storage requires (one cache, kept alive, used
+    // by EVERY op on the range) — see patch_rmk_storage_boot_cache's audit
+    // of every call site this was threaded through.
+    pub(crate) cache: sequential_storage::cache::KeyPointerCache<32, u32, 384>,
+}"#;
+    if !contents.contains(struct_from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} storage/mod.rs Storage struct definition missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_storage_boot_cache",
+            path.display()
+        );
+    }
+    contents = contents.replace(struct_from, struct_to);
+
+    // (2) initialize it at the struct's one construction site (in `new`).
+    let ctor_from = r#"        let mut storage = Self {
+            flash,
+            storage_range,
+            buffer: [0; get_buffer_size()],
+        };"#;
+    let ctor_to = r#"        let mut storage = Self {
+            flash,
+            storage_range,
+            buffer: [0; get_buffer_size()],
+            cache: sequential_storage::cache::KeyPointerCache::new(),
+        };"#;
+    if !contents.contains(ctor_from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} storage/mod.rs Storage::new() constructor literal missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_storage_boot_cache",
+            path.display()
+        );
+    }
+    contents = contents.replace(ctor_from, ctor_to);
+
+    // (3) the one NoCache site inside `new()` itself, BEFORE `self` exists —
+    // it operates on the local `storage` binding, so it reads `storage.cache`.
+    let new_err_from = r#"                store_item(
+                    &mut storage.flash,
+                    storage.storage_range.clone(),
+                    &mut NoCache::new(),
+                    &mut storage.buffer,
+                    &(StorageKeys::StorageConfig as u32),"#;
+    let new_err_to = r#"                store_item(
+                    &mut storage.flash,
+                    storage.storage_range.clone(),
+                    &mut storage.cache,
+                    &mut storage.buffer,
+                    &(StorageKeys::StorageConfig as u32),"#;
+    if !contents.contains(new_err_from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} storage/mod.rs new() error-path store_item missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_storage_boot_cache",
+            path.display()
+        );
+    }
+    contents = contents.replace(new_err_from, new_err_to);
+
+    // (4) `run(&mut self)`: drop the per-task-loop NoCache local and route
+    // every one of its call sites through `self.cache` instead. The
+    // "storage_cache" identifier is unique to this function in the file
+    // (audited by hand), so the whole-file literal replace below is exactly
+    // as scoped as a hand-written per-site edit would be.
+    let run_decl_from = "    pub(crate) async fn run(&mut self) {\n        let mut storage_cache = NoCache::new();\n        loop {";
+    let run_decl_to = "    pub(crate) async fn run(&mut self) {\n        loop {";
+    if !contents.contains(run_decl_from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} storage/mod.rs run() storage_cache declaration missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_storage_boot_cache",
+            path.display()
+        );
+    }
+    contents = contents.replace(run_decl_from, run_decl_to);
+
+    if contents.matches("&mut storage_cache").count() == 0 {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} storage/mod.rs run() to reference \
+             '&mut storage_cache' at least once in {}; upstream may have changed — \
+             update firmware/build.rs::patch_rmk_storage_boot_cache",
+            path.display()
+        );
+    }
+    contents = contents.replace("&mut storage_cache", "&mut self.cache");
+
+    // (5) `initialize_storage_with_config` and `reset_layout_only` both
+    // declare a same-named local `cache` and pass `&mut cache,` to every
+    // store_item call (audited by hand: exactly 2 declarations, 13 usage
+    // sites total across both functions — the ONLY "&mut cache," substrings
+    // in the file, and the ONLY "let mut cache = NoCache::new();" lines).
+    let cache_decl_from = "        let mut cache = NoCache::new();\n";
+    let cache_decl_count = contents.matches(cache_decl_from).count();
+    if cache_decl_count != 2 {
+        panic!(
+            "kobu: expected exactly 2 occurrences of the local `cache` declaration in rmk-{RMK_VERSION} {} \
+             (initialize_storage_with_config + reset_layout_only), found {}; upstream may have changed — \
+             update firmware/build.rs::patch_rmk_storage_boot_cache",
+            path.display(),
+            cache_decl_count
+        );
+    }
+    contents = contents.replace(
+        cache_decl_from,
+        "        // kobu: cache is now Self::cache — see patch_rmk_storage_boot_cache\n",
+    );
+
+    let cache_usage_count = contents.matches("&mut cache,").count();
+    if cache_usage_count != 13 {
+        panic!(
+            "kobu: expected exactly 13 '&mut cache,' call sites in rmk-{RMK_VERSION} {}, found {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_storage_boot_cache",
+            path.display(),
+            cache_usage_count
+        );
+    }
+    contents = contents.replace("&mut cache,", "&mut self.cache,");
+
+    // (6) five direct `&mut NoCache::new(),` methods that don't go through a
+    // named local: read_behavior_config, check_enable, read_trouble_bond_info,
+    // read_peer_address, write_peer_address. All are genuine `&mut self`
+    // methods, so all become `&mut self.cache,`. (The `new()` constructor's
+    // own NoCache site was already handled in step 3, so it's already gone
+    // from `contents` by this point and doesn't inflate this count.)
+    let direct_nocache_count = contents.matches("&mut NoCache::new(),").count();
+    if direct_nocache_count != 5 {
+        panic!(
+            "kobu: expected exactly 5 remaining '&mut NoCache::new(),' call sites in rmk-{RMK_VERSION} {} \
+             (read_behavior_config/check_enable/read_trouble_bond_info/read_peer_address/write_peer_address), \
+             found {}; upstream may have changed — update firmware/build.rs::patch_rmk_storage_boot_cache",
+            path.display(),
+            direct_nocache_count
+        );
+    }
+    contents = contents.replace("&mut NoCache::new(),", "&mut self.cache,");
+
+    // (7) the read_storage! macro: $storage is always a `&mut Storage<...>`
+    // reference at every call site (confirmed: ble/mod.rs + ble/profile.rs,
+    // the only two invocations in the crate), so $storage.cache resolves to
+    // the exact same shared instance via auto-deref.
+    let macro_from = "&mut sequential_storage::cache::NoCache::new(),";
+    if !contents.contains(macro_from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} storage/mod.rs read_storage! macro NoCache site missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_storage_boot_cache",
+            path.display()
+        );
+    }
+    contents = contents.replace(macro_from, "&mut $storage.cache,");
+
+    // Final sanity: no functional NoCache CONSTRUCTOR call should remain (the
+    // `use sequential_storage::cache::NoCache;` import itself becomes dead —
+    // harmless, rmk is a dependency and its lint warnings are capped).
+    let remaining = contents.matches("NoCache::new()").count();
+    if remaining != 0 {
+        panic!(
+            "kobu: rmk-{RMK_VERSION} storage/mod.rs still has {} NoCache::new() site(s) after patching {}; \
+             a call site was missed — update firmware/build.rs::patch_rmk_storage_boot_cache",
+            remaining,
+            path.display()
+        );
+    }
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
 /// :/; native inversion (2026-06-12 #3). The Karabiner "Exchange semicolon
 /// and colon" rule is now DEVICE-SCOPED to exclude kobu (device_unless
 /// vendor 19279 / product 16985 added to ~/.config/karabiner/karabiner.json),
@@ -5810,6 +6279,158 @@ fn patch_rmk_kana_press_edge() {
         }
     }
 }
+
+/// D+F combo → WM(No, ⌘⌥) pure-modifier-hold chord fix (2026-07-13). rmk's
+/// anti-leak rule in `process_key_action_inner` unconditionally clears
+/// `with_modifiers` on ANY new key press — correct for a real
+/// `WM(key, mods)` (whose own key already consumed the mods in the same hid
+/// report) but wrong for the pure-hold form `WM(No, mods)`, whose only
+/// purpose is to chord with a LATER key (kobu's D+F combo → `WM(No,
+/// LGui|LAlt)`, meant to chord with a following Space for ⌘⌥+Space / Finder
+/// search — keyboard.toml's own comments already flagged this rmk
+/// limitation). Fix: a `KOBU_PURE_MOD_HOLD` flag, set true only when the
+/// held `KeyCode` is the sentinel `KeyCode::No` (i.e. a pure modifier hold,
+/// never a real key), that the anti-leak clear skips while true.
+fn patch_rmk_pure_wm_hold_chord() {
+    const MARKER: &str = "// kobu: WM(No,mods) pure-modifier-hold chording applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    // (1) battery.rs: the KOBU_PURE_MOD_HOLD flag, appended after the last
+    // kobu atomic (KOBU_PERIPHERAL_SAMPLES, round 23).
+    {
+        let Some(path) = find_rmk_file(RMK_VERSION, "src/input_device/battery.rs") else {
+            println!(
+                "cargo:warning=kobu: could not find rmk-{RMK_VERSION} input_device/battery.rs; \
+                 pure-WM-hold-chord patch was not applied"
+            );
+            return;
+        };
+        println!("cargo:rerun-if-changed={}", path.display());
+        let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("kobu: failed to read {}: {e}", path.display());
+        });
+        if !contents.contains(MARKER) {
+            let anchor = "pub static KOBU_PERIPHERAL_SAMPLES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);";
+            if !contents.contains(anchor) {
+                panic!(
+                    "kobu: expected KOBU_PERIPHERAL_SAMPLES anchor in rmk-{RMK_VERSION} input_device/battery.rs at {}; \
+                     upstream may have changed — update firmware/build.rs::patch_rmk_pure_wm_hold_chord",
+                    path.display()
+                );
+            }
+            let injected = format!(
+                "{anchor}\n\n\
+                 // kobu: true while a PURE modifier hold (Action::KeyWithModifier with key ==\n\
+                 // KeyCode::No, e.g. the D+F combo's WM(No, LGui|LAlt)) is held. While true,\n\
+                 // keyboard.rs skips its clear-with_modifiers-on-new-press anti-leak rule so\n\
+                 // the held mods CHORD with subsequent keys (⌘⌥+Space = Finder search).\n\
+                 pub static KOBU_PURE_MOD_HOLD: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);"
+            );
+            contents = contents.replace(anchor, &injected);
+            contents.push('\n');
+            contents.push_str(MARKER);
+            contents.push('\n');
+            fs::write(&path, contents).unwrap_or_else(|e| {
+                panic!("kobu: failed to write {}: {e}", path.display());
+            });
+        }
+    }
+
+    // (2) keyboard.rs: the KeyWithModifier press/release arm (sets the flag)
+    // and the anti-leak clear condition (checks it). Both anchors are
+    // pristine text untouched by any other kobu patch in this file; the
+    // fork-suppress site at `self.with_modifiers &= !suppress;` is a
+    // DIFFERENT location and is not touched here.
+    {
+        let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard.rs") else {
+            println!(
+                "cargo:warning=kobu: could not find rmk-{RMK_VERSION} keyboard.rs; \
+                 pure-WM-hold-chord patch was not applied"
+            );
+            return;
+        };
+        println!("cargo:rerun-if-changed={}", path.display());
+        let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!("kobu: failed to read {}: {e}", path.display());
+        });
+        if contents.contains(MARKER) {
+            return;
+        }
+
+        // (label, from, to)
+        let replacements: [(&str, &str, &str); 2] = [
+            (
+                "KeyWithModifier press/release flag set",
+                r#"            Action::KeyWithModifier(key_code, modifiers) => {
+                if event.pressed {
+                    // These modifiers will be combined into the hid report, so
+                    // they will be "pressed" the same time as the key (in same hid report)
+                    self.with_modifiers |= modifiers;
+                } else {
+                    // The modifiers will not be part of the hid report, so
+                    // they will be "released" the same time as the key (in same hid report)
+                    self.with_modifiers &= !(modifiers);
+                }
+                self.process_action_key(key_code, event).await
+            }"#,
+                r#"            Action::KeyWithModifier(key_code, modifiers) => {
+                if event.pressed {
+                    // These modifiers will be combined into the hid report, so
+                    // they will be "pressed" the same time as the key (in same hid report)
+                    self.with_modifiers |= modifiers;
+                    // kobu: WM(No, mods) = deliberate pure modifier hold; flag
+                    // it so the anti-leak clear below keeps mods held for
+                    // chording. A real WM(key, mods) leaves this false.
+                    crate::input_device::battery::KOBU_PURE_MOD_HOLD
+                        .store(key_code == KeyCode::No, core::sync::atomic::Ordering::Relaxed);
+                } else {
+                    // The modifiers will not be part of the hid report, so
+                    // they will be "released" the same time as the key (in same hid report)
+                    self.with_modifiers &= !(modifiers);
+                    crate::input_device::battery::KOBU_PURE_MOD_HOLD
+                        .store(false, core::sync::atomic::Ordering::Relaxed);
+                }
+                self.process_action_key(key_code, event).await
+            }"#,
+            ),
+            (
+                "anti-leak clear gated on pure-mod-hold",
+                r#"        // Clear with_modifier if a new key is pressed
+        if self.with_modifiers.into_bits() != 0 && event.pressed {
+            self.with_modifiers = ModifierCombination::new();
+        }"#,
+                r#"        // Clear with_modifier if a new key is pressed
+        // kobu: EXCEPT while a pure WM(No, mods) hold is chording — see
+        // patch_rmk_pure_wm_hold_chord.
+        if self.with_modifiers.into_bits() != 0
+            && event.pressed
+            && !crate::input_device::battery::KOBU_PURE_MOD_HOLD.load(core::sync::atomic::Ordering::Relaxed)
+        {
+            self.with_modifiers = ModifierCombination::new();
+        }"#,
+            ),
+        ];
+
+        for (label, from, to) in replacements {
+            if !contents.contains(from) {
+                panic!(
+                    "kobu: expected rmk-{RMK_VERSION} keyboard.rs {label} anchor missing in {}; \
+                     upstream may have changed — update firmware/build.rs::patch_rmk_pure_wm_hold_chord",
+                    path.display()
+                );
+            }
+            contents = contents.replace(from, to);
+        }
+
+        contents.push('\n');
+        contents.push_str(MARKER);
+        contents.push('\n');
+        fs::write(&path, contents).unwrap_or_else(|e| {
+            panic!("kobu: failed to write {}: {e}", path.display());
+        });
+    }
+}
+
 /// Cmd+Enter fix (v7) — ENTER chord press-edge. The Enter LT is balanced, so
 /// its TAP resolves at RELEASE with that instant's modifiers; in a fast
 /// Cmd+Enter the user releases Cmd first and the send-chord degraded to a
