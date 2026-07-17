@@ -79,6 +79,15 @@ const-gen = "1.6"
 # unchanged). All diag code is `if cfg!(feature = "led-conn-diag")`-gated so the
 # normal binary is byte-for-byte unaffected.
 led-conn-diag = []
+# Temporary on-device diagnostic (round 7) for the scroll-death recurrence: makes
+# the central status LED show which layer of the LEFT PMW3610 pipeline is alive
+# (red = init never Ready, white = chronic 0xff SPI garbage, blue = scroll HID
+# reports emitting fine, green = sensor producing samples but not reaching an
+# emit, off = Ready + silent = misconfigured-sensor mode). Build with
+# `--features led-ball-diag`; the normal build omits it. All diag code is
+# `if cfg!(feature = "led-ball-diag")`-gated so the normal binary is
+# byte-for-byte unaffected.
+led-ball-diag = []
 
 [[bin]]
 name = "central"

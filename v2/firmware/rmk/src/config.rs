@@ -27,10 +27,10 @@ use core::sync::atomic::Ordering;
 use embassy_nrf::pac;
 use embassy_time::Duration;
 use rmk::input_device::battery::{
-    KOBU_HOST_CONN_INTERVAL_US, KOBU_HOST_CONNECTED, KOBU_LAST_KEY_TICKS, KOBU_LAST_TYPING_TICKS,
-    KOBU_MOUSE_BUTTONS, KOBU_SCROLL_INVERT_X, KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_THROTTLE_MS,
-    KOBU_STATUS_LED_BAT_HIGH, KOBU_STATUS_LED_BAT_LOW, KOBU_STATUS_LED_PURPLE_HOLD_MS,
-    KOBU_TRACKBALL_CPI,
+    KOBU_BALL_FF_REJECTS, KOBU_BALL_INIT_READY, KOBU_HOST_CONN_INTERVAL_US, KOBU_HOST_CONNECTED,
+    KOBU_LAST_KEY_TICKS, KOBU_LAST_TYPING_TICKS, KOBU_MOUSE_BUTTONS, KOBU_PERIPHERAL_SAMPLES,
+    KOBU_SCROLL_INVERT_X, KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_THROTTLE_MS, KOBU_STATUS_LED_BAT_HIGH,
+    KOBU_STATUS_LED_BAT_LOW, KOBU_STATUS_LED_PURPLE_HOLD_MS, KOBU_TRACKBALL_CPI,
 };
 
 /// Ordering used for all reads / writes here. `Relaxed` is correct
@@ -253,4 +253,49 @@ pub fn note_pointer_sample() {
 #[allow(dead_code)]
 pub fn take_pointer_samples() -> u32 {
     KOBU_POINTER_SAMPLES.swap(0, ORD)
+}
+
+// ─── Ball-diagnosis LED (feature `led-ball-diag`, round 7) ───────────
+//
+// Temporary on-device diagnostic for the scroll-death recurrence: with the
+// feature on, the status LED (src/status_led.rs) shows which layer of the
+// LEFT (central-local) PMW3610 pipeline is alive. The counters below are
+// unconditional (cheap atomic ops; always counting, in every build) — only
+// the LED's read/branch side is `if cfg!(feature = "led-ball-diag")`-gated,
+// so the normal binary is byte-for-byte unaffected.
+
+/// True once the LEFT PMW3610's `try_init` has reached `InitState::Ready`
+/// this session (see `build.rs::patch_rmk_pmw3610_init_retry_forever`).
+/// `allow(dead_code)`: only referenced under `cfg!(feature = "led-ball-diag")`.
+#[allow(dead_code)]
+pub fn ball_init_ready() -> bool {
+    KOBU_BALL_INIT_READY.load(ORD)
+}
+
+/// Read-and-reset the LEFT PMW3610's all-0xff burst-frame reject counter (see
+/// `build.rs::patch_rmk_pmw3610_reject_ff_frame`). Non-zero means the flaky-SPI
+/// idle-high rejection fired at least once since the last poll.
+#[allow(dead_code)]
+pub fn take_ball_ff_rejects() -> u32 {
+    KOBU_BALL_FF_REJECTS.swap(0, ORD)
+}
+
+/// Read-and-reset the LEFT ball's non-zero-motion SAMPLE counter (the
+/// central's own attached PMW3610's production count — see
+/// `build.rs::patch_rmk_pmw3610_input_gate`'s `KOBU_PERIPHERAL_SAMPLES`,
+/// incremented in `read_event` on this bin). Non-zero means the sensor
+/// produced at least one non-zero motion sample since the last poll.
+#[allow(dead_code)]
+pub fn take_ball_motion_samples() -> u32 {
+    KOBU_PERIPHERAL_SAMPLES.swap(0, ORD)
+}
+
+/// Read-and-reset kobu's own scroll-report-EMITTED counter (see
+/// `trackball.rs::SCROLL_EMITS`, incremented on every successful wheel
+/// `try_send`). Non-zero means the firmware actually sent a scroll HID
+/// report since the last poll — a dead scroll with this still nonzero points
+/// at macOS, not the firmware.
+#[allow(dead_code)]
+pub fn take_scroll_emits() -> u32 {
+    crate::trackball::SCROLL_EMITS.swap(0, ORD)
 }

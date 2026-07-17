@@ -227,6 +227,58 @@ impl<'d> StatusLedController<'d> {
         self.apply(color);
     }
 
+    /// Diagnostic LED (feature `led-ball-diag`, round 7): tell which layer of
+    /// the LEFT (central-local) PMW3610 pipeline is alive when the scroll
+    /// next dies silently. Priority order (top wins), each a swap-and-check
+    /// against the previous 50 ms tick:
+    ///   Magenta (round 9, TOP priority): still within `BOOT_MARKER_WINDOW_MS`
+    ///            of boot. `Instant::now()` is embassy-time UPTIME (monotonic
+    ///            from power-on), so this is a literal boot marker, not a
+    ///            state read. A magenta flash appearing SPONTANEOUSLY mid-
+    ///            session (not at the user's own power-on) means the central
+    ///            just rebooted — this is round 9's diagnostic for whether a
+    ///            crash/brownout is happening (the hypothesis behind
+    ///            reverting `patch_rmk_bitbang_atomic_bytes`, suspected of
+    ///            tripping an MPSL interrupt-latency assert into a reset).
+    ///            Reuses `Color::Purple`'s RGB (red+blue) — on this common-
+    ///            anode LED that already IS magenta, so no new variant is
+    ///            needed; this mode and the normal layer-indicator's Purple
+    ///            (layer 4) never run in the same build (mutually exclusive
+    ///            via the `led-ball-diag` / normal `cfg!` branch below).
+    ///   Red    : sensor init never reached Ready this session (SDIO wedged;
+    ///            see `patch_rmk_pmw3610_init_retry_forever`).
+    ///   White  : an all-0xff burst frame was rejected since the last tick
+    ///            (chronic flaky-SPI garbage; see
+    ///            `patch_rmk_pmw3610_reject_ff_frame`).
+    ///   Blue   : a scroll HID report was actually emitted since the last
+    ///            tick (firmware fine end-to-end; a dead scroll with blue
+    ///            still flashing points at macOS, not the firmware).
+    ///   Green  : the sensor produced non-zero motion samples but none made
+    ///            it to an emitted report (processor/channel layer eating
+    ///            them).
+    ///   Off    : Ready, no 0xff rejects, no samples at all this tick — the
+    ///            sensor is configured but producing nothing (the
+    ///            misconfigured-sensor / torn-write mode
+    ///            `patch_rmk_pmw3610_verify_init_writes` targets).
+    #[allow(dead_code)]
+    fn diag_ball_apply(&mut self) {
+        const BOOT_MARKER_WINDOW_MS: u64 = 5_000;
+        let color = if Instant::now().as_millis() < BOOT_MARKER_WINDOW_MS {
+            Color::Purple
+        } else if !config::ball_init_ready() {
+            Color::Red
+        } else if config::take_ball_ff_rejects() > 0 {
+            Color::White
+        } else if config::take_scroll_emits() > 0 {
+            Color::Blue
+        } else if config::take_ball_motion_samples() > 0 {
+            Color::Green
+        } else {
+            Color::Off
+        };
+        self.apply(color);
+    }
+
     fn apply(&mut self, color: Color) {
         if self.current == color {
             return;
@@ -273,7 +325,11 @@ impl<'d> Controller for StatusLedController<'d> {
                 self.layer = layer;
             }
         }
-        if cfg!(feature = "led-conn-diag") {
+        if cfg!(feature = "led-ball-diag") {
+            // Diagnostic mode: the ball-diag band is driven by update() every
+            // 50ms; battery/layer events do not repaint the LED.
+            self.diag_ball_apply();
+        } else if cfg!(feature = "led-conn-diag") {
             // Diagnostic mode: the host-interval band is driven by update()
             // every 50ms; battery/layer events do not repaint the LED.
             self.diag_apply();
@@ -305,7 +361,9 @@ impl<'d> PollingController for StatusLedController<'d> {
     const INTERVAL: Duration = Duration::from_millis(50);
 
     async fn update(&mut self) {
-        if cfg!(feature = "led-conn-diag") {
+        if cfg!(feature = "led-ball-diag") {
+            self.diag_ball_apply();
+        } else if cfg!(feature = "led-conn-diag") {
             self.diag_apply();
         } else {
             let color = self.target_color();

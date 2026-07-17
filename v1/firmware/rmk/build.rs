@@ -70,12 +70,32 @@ fn main() {
     patch_rmk_kobu_input_gate_atomics();
     patch_rmk_timeout_peripheral_event_write();
     patch_rmk_pmw3610_input_gate();
+    // Round 7 ball-diag atomics: must run before the two patches below, which
+    // reference them (KOBU_BALL_FF_REJECTS / KOBU_BALL_INIT_READY).
+    patch_rmk_kobu_ball_diag_atomics();
     // PMW3610 boot-lottery fix: the stock driver gives up after 3 init
     // attempts (~300 ms) and parks dead until power-cycle, and treats a
     // flaky-SPI all-0xff burst read as a real (phantom) motion sample.
     // Retry init forever (fast then relaxed backoff) and reject 0xff frames.
     patch_rmk_pmw3610_init_retry_forever();
     patch_rmk_pmw3610_reject_ff_frame();
+    // Round 7 — scroll-death recurrence, no self-heal: a torn bit-banged SPI
+    // config write (preempted mid-byte by MPSL radio interrupts) can leave
+    // the sensor misconfigured but still Ready. Verify-and-retry the writes.
+    patch_rmk_pmw3610_verify_init_writes();
+    // Round 8 — live-confirmed (led-ball-diag): init retries fail while the
+    // radio is busy, succeeding only in quiet moments. Run the one-time init
+    // BEFORE the input gate (power-on is the reliably radio-quiet window).
+    patch_rmk_pmw3610_early_init();
+    // KOBU: patch_rmk_bitbang_atomic_bytes REVERTED 2026-07-15 (round 9) — a
+    // mid-session central reboot (LED green/blue -> solid RED with scroll
+    // dead, right ball fine; init_state can only reach that state via a
+    // fresh boot + persistently-failing re-init) is suspected to be MPSL
+    // tripping its interrupt-latency assert on the repeated ~30 µs PRIMASK
+    // masks (7-byte bursts every 8 ms poll = constant masking). It also
+    // couldn't protect the preemptible inter-byte Timer::after gaps, so it
+    // was an incomplete fix regardless. Do NOT re-add without addressing
+    // both: a latency budget that satisfies MPSL, and inter-byte coverage.
     patch_rmk_split_host_ready_variant();
     patch_rmk_emit_host_ready();
     patch_rmk_peripheral_apply_host_ready();
@@ -3400,6 +3420,73 @@ fn patch_rmk_pmw3610_input_gate() {
     });
 }
 
+/// Ball-diagnosis LED (round 7, temporary diagnostic build): two new atomics
+/// so a `led-ball-diag`-gated status LED can show which layer of the PMW3610
+/// pipeline is alive when the scroll next dies silently — leading theory is
+/// the bit-banged SPI init running on the CPU gets preempted mid-byte by MPSL
+/// radio interrupts, tearing a config register WRITE that still passes the
+/// PROD_ID/OBSERVATION1 checks but leaves the sensor misconfigured (silent
+/// for the whole session; init_state=Ready so the retry-forever loop never
+/// re-runs). Reading grid (relayed to the user in the report, not code):
+/// dead+RED = init still failing; dead+GREEN-on-roll-no-BLUE = sensor fine,
+/// processor/channel eating it; dead+BLUE = firmware fine, macOS side;
+/// dead+no color on roll = Ready but producing nothing = the misconfigured-
+/// sensor mode patch_rmk_pmw3610_verify_init_writes targets; WHITE flashes =
+/// chronic 0xff garbage. Must run before patch_rmk_pmw3610_init_retry_forever
+/// and patch_rmk_pmw3610_reject_ff_frame, which both reference these atomics.
+fn patch_rmk_kobu_ball_diag_atomics() {
+    const MARKER: &str = "// kobu: ball-diag atomics applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/input_device/battery.rs") else {
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    // Anchors on KOBU_INPUT_GATE_WAKE (injected by patch_rmk_kobu_input_gate_atomics,
+    // which runs just before this in main()) rather than a later static like
+    // KOBU_PURE_MOD_HOLD — this patch's call site is EARLY (right after
+    // patch_rmk_pmw3610_input_gate, so the pmw3610.rs patches that reference
+    // these atomics can follow immediately), so it must anchor on whatever is
+    // guaranteed to already exist at THAT point in main()'s call order, not
+    // the latest static in the file overall.
+    let anchor = "pub static KOBU_INPUT_GATE_WAKE: Signal<crate::RawMutex, ()> = Signal::new();";
+    if !contents.contains(anchor) {
+        panic!(
+            "kobu: expected KOBU_INPUT_GATE_WAKE anchor in rmk-{RMK_VERSION} input_device/battery.rs at {}; \
+             patch_rmk_kobu_input_gate_atomics must run first — check order in build.rs::main",
+            path.display()
+        );
+    }
+    let injected = format!(
+        "{anchor}\n\n\
+         // kobu (round 7 ball-diag): incremented on every rejected all-0xff\n\
+         // PMW3610 burst frame (see patch_rmk_pmw3610_reject_ff_frame). Chronic\n\
+         // increments under led-ball-diag flash the status LED WHITE (flaky-SPI\n\
+         // garbage mode).\n\
+         pub static KOBU_BALL_FF_REJECTS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);\n\n\
+         // kobu (round 7 ball-diag): true once try_init reaches InitState::Ready\n\
+         // (see patch_rmk_pmw3610_init_retry_forever), false while Pending/\n\
+         // Initializing/never-Ready. Under led-ball-diag a false reading (solid\n\
+         // RED) means the sensor's init never succeeded this session (SDIO wedged).\n\
+         pub static KOBU_BALL_INIT_READY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);"
+    );
+    contents = contents.replace(anchor, &injected);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
 /// The PMW3610's 3-wire shared-SDIO SPI link is empirically flaky at
 /// power-up (reads return 0xff until the line settles; the ZMK port of this
 /// same hardware needed up to ~100 init retries to ride this out). Stock
@@ -3408,6 +3495,13 @@ fn patch_rmk_pmw3610_input_gate() {
 /// dead until the next power cycle. Retry forever instead: 100 ms cadence
 /// for the first 10 attempts, then a relaxed 1 s cadence so a genuinely
 /// absent sensor costs ~nothing.
+///
+/// Round 7 addition: also latch `KOBU_BALL_INIT_READY` true on the Ok branch
+/// (the ONLY place `InitState::Ready` is ever reached), so the led-ball-diag
+/// status LED can tell "init never succeeded this session" (solid RED) apart
+/// from "init succeeded but the sensor is silent anyway" (the misconfigured-
+/// sensor mode Task A's write-verify targets). Anchors on the Ok+Err match
+/// arms together, so this patch now covers both.
 fn patch_rmk_pmw3610_init_retry_forever() {
     const MARKER: &str = "// kobu: PMW3610 init retry-forever applied";
     const RMK_VERSION: &str = "0.8.2";
@@ -3427,7 +3521,12 @@ fn patch_rmk_pmw3610_init_retry_forever() {
         return;
     }
 
-    let from = r#"                Err(_e) => {
+    let from = r#"                Ok(()) => {
+                    info!("PMW3610: Sensor initialized successfully");
+                    self.init_state = InitState::Ready;
+                    return true;
+                }
+                Err(_e) => {
                     error!("PMW3610: Init failed: {:?}", _e);
                     if retry_count + 1 >= Self::MAX_INIT_RETRIES {
                         error!("PMW3610: Max retries reached, giving up");
@@ -3438,7 +3537,16 @@ fn patch_rmk_pmw3610_init_retry_forever() {
                     Timer::after(Duration::from_millis(100)).await;
                     return false;
                 }"#;
-    let to = r#"                Err(_e) => {
+    let to = r#"                Ok(()) => {
+                    info!("PMW3610: Sensor initialized successfully");
+                    self.init_state = InitState::Ready;
+                    // kobu (round 7 ball-diag): let led-ball-diag tell
+                    // init-succeeded apart from init-never-succeeded.
+                    crate::input_device::battery::KOBU_BALL_INIT_READY
+                        .store(true, core::sync::atomic::Ordering::Relaxed);
+                    return true;
+                }
+                Err(_e) => {
                     error!("PMW3610: Init failed: {:?}", _e);
                     // kobu: NEVER park in InitState::Failed. This sensor's 3-wire
                     // shared-SDIO link is empirically flaky at power-up (the ZMK
@@ -3457,7 +3565,7 @@ fn patch_rmk_pmw3610_init_retry_forever() {
 
     if !contents.contains(from) {
         panic!(
-            "kobu: expected rmk-{RMK_VERSION} pmw3610.rs try_init Err-branch anchor missing in {}; \
+            "kobu: expected rmk-{RMK_VERSION} pmw3610.rs try_init Ok/Err-branch anchor missing in {}; \
              upstream may have changed — update firmware/build.rs::patch_rmk_pmw3610_init_retry_forever",
             path.display()
         );
@@ -3476,6 +3584,12 @@ fn patch_rmk_pmw3610_init_retry_forever() {
 /// is that same flaky-SPI idle-high read, not a real motion report — left
 /// unchecked it decodes as a phantom dx=dy=-1 creep (ghost scroll). Reject it
 /// exactly like the ZMK port of this hardware does.
+///
+/// Round 7 addition: count rejects in `KOBU_BALL_FF_REJECTS` so the
+/// led-ball-diag status LED can flash WHITE on CHRONIC 0xff garbage (as
+/// opposed to the sensor being Ready but silently misconfigured, which
+/// produces no frames — burst reads happen, but the motion-status bit stays
+/// clear, not 0xff — see the reading grid in patch_rmk_kobu_ball_diag_atomics).
 fn patch_rmk_pmw3610_reject_ff_frame() {
     const MARKER: &str = "// kobu: PMW3610 0xff burst-frame reject applied";
     const RMK_VERSION: &str = "0.8.2";
@@ -3503,6 +3617,10 @@ fn patch_rmk_pmw3610_reject_ff_frame() {
             // real motion report — it would decode as a phantom dx=dy=-1 creep
             // (ghost scroll). Same rejection the ZMK port shipped for this exact
             // hardware.
+            // kobu (round 7 ball-diag): count rejects so led-ball-diag can flash
+            // WHITE on chronic 0xff garbage (see patch_rmk_kobu_ball_diag_atomics).
+            crate::input_device::battery::KOBU_BALL_FF_REJECTS
+                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
             return Ok(MotionData::default());
         }
         if (burst_data[BURST_MOTION] & MOTION_STATUS_MOTION) == 0x00 {
@@ -3513,6 +3631,239 @@ fn patch_rmk_pmw3610_reject_ff_frame() {
         panic!(
             "kobu: expected rmk-{RMK_VERSION} pmw3610.rs read_motion MOTION_STATUS_MOTION anchor missing in {}; \
              upstream may have changed — update firmware/build.rs::patch_rmk_pmw3610_reject_ff_frame",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Round 7 — scroll-death recurrence with NO self-heal, left ball only,
+/// cleared by a BT reconnect ritual. init_state=Ready rules out the boot-
+/// lottery mode retry-forever already fixed. Leading theory: the bit-banged
+/// SPI init runs on the CPU, and MPSL radio interrupts (prio 0, ms-scale) can
+/// preempt it mid-byte; a torn config-register WRITE still passes the
+/// PROD_ID/OBSERVATION1 checks (those are independently verified reads) but
+/// leaves the sensor silently misconfigured for the rest of the session.
+/// Fix: a write-verify-or-fail helper for the config writes in `configure`/
+/// `set_resolution`/`force_awake` (the ones NOT already read back a few lines
+/// later for other reasons) — a torn write now becomes a normal init
+/// failure, which retry-forever already knows how to recover from. Left
+/// untouched: POWER_UP_RESET (write-only reset pulse), SPI_CLK_ON_REQ (page
+/// gate, no data-integrity stake), the 0x7f page-select writes, SMART_MODE
+/// runtime writes, and OBSERVATION1 (already check-verified by its own read).
+fn patch_rmk_pmw3610_verify_init_writes() {
+    const MARKER: &str = "// kobu: PMW3610 init write-verify applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/input_device/pmw3610.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} input_device/pmw3610.rs; \
+             PMW3610 init write-verify patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    // (1) add the write_reg_verified helper, right after write_reg.
+    let helper_from = r#"    async fn write_reg(&mut self, addr: u8, value: u8) -> Result<(), Pmw3610Error> {
+        let _ = self.cs.set_low();
+        Timer::after(Duration::from_micros(T_NCS_SCLK_US)).await;
+
+        self.spi
+            .write(&[addr | SPI_WRITE, value])
+            .await
+            .map_err(|_| Pmw3610Error::Spi)?;
+
+        Timer::after(Duration::from_micros(T_SCLK_NCS_WR_US)).await;
+        let _ = self.cs.set_high();
+
+        Timer::after(Duration::from_micros(T_SWX_US)).await;
+
+        Ok(())
+    }
+
+    async fn spi_clk_on(&mut self) -> Result<(), Pmw3610Error> {"#;
+    let helper_to = r#"    async fn write_reg(&mut self, addr: u8, value: u8) -> Result<(), Pmw3610Error> {
+        let _ = self.cs.set_low();
+        Timer::after(Duration::from_micros(T_NCS_SCLK_US)).await;
+
+        self.spi
+            .write(&[addr | SPI_WRITE, value])
+            .await
+            .map_err(|_| Pmw3610Error::Spi)?;
+
+        Timer::after(Duration::from_micros(T_SCLK_NCS_WR_US)).await;
+        let _ = self.cs.set_high();
+
+        Timer::after(Duration::from_micros(T_SWX_US)).await;
+
+        Ok(())
+    }
+
+    /// kobu: write a config register and read it back, retrying up to 3x.
+    /// The bit-banged SPI runs on the CPU and can be preempted mid-byte by
+    /// MPSL radio interrupts; a torn write passes the init checks but leaves
+    /// the sensor misconfigured (silent ball for the whole session). A
+    /// verify-or-fail turns that into a normal init failure, which the
+    /// retry-forever loop then recovers.
+    async fn write_reg_verified(&mut self, addr: u8, value: u8) -> Result<(), Pmw3610Error> {
+        for _ in 0..3 {
+            self.write_reg(addr, value).await?;
+            if self.read_reg(addr).await? == value {
+                return Ok(());
+            }
+        }
+        Err(Pmw3610Error::InitFailed)
+    }
+
+    async fn spi_clk_on(&mut self) -> Result<(), Pmw3610Error> {"#;
+    if !contents.contains(helper_from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} pmw3610.rs write_reg/spi_clk_on boundary missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_pmw3610_verify_init_writes",
+            path.display()
+        );
+    }
+    contents = contents.replace(helper_from, helper_to);
+
+    // (2) convert the 7 targeted call sites (each verified unique beforehand).
+    let call_sites: [&str; 7] = [
+        "self.write_reg(PMW3610_PERFORMANCE, PERFORMANCE_INIT).await?;",
+        "self.write_reg(PMW3610_RUN_DOWNSHIFT, RUN_DOWNSHIFT_INIT).await?;",
+        "self.write_reg(PMW3610_REST1_RATE, REST1_RATE_INIT).await?;",
+        "self.write_reg(PMW3610_REST1_DOWNSHIFT, REST1_DOWNSHIFT_INIT).await?;",
+        "self.write_reg(PMW3610_RES_STEP, res_step_val).await?;",
+        "self.write_reg(PMW3610_RES_STEP, val).await?;",
+        "self.write_reg(PMW3610_PERFORMANCE, val).await?;",
+    ];
+    for site in call_sites {
+        if !contents.contains(site) {
+            panic!(
+                "kobu: expected rmk-{RMK_VERSION} pmw3610.rs call site `{site}` missing in {}; \
+                 upstream may have changed — update firmware/build.rs::patch_rmk_pmw3610_verify_init_writes",
+                path.display()
+            );
+        }
+        let verified = site.replacen("self.write_reg(", "self.write_reg_verified(", 1);
+        contents = contents.replace(site, &verified);
+    }
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Root cause CONFIRMED live via led-ball-diag (2026-07-15): the user saw
+/// SOLID RED for an extended period that then self-healed to green/blue with
+/// scroll working — write-verify (round 7) is working exactly as designed
+/// (torn init writes now FAIL instead of silently passing), but init retries
+/// keep failing while the radio is busy (the Mac link's 15 ms + the split
+/// link's 8.75 ms both preempt the bit-banged SPI mid-byte), succeeding only
+/// when the radio has a quiet moment. Fix: run the one-time init IMMEDIATELY
+/// at power-on, BEFORE the input gate — power-on is the one reliably
+/// radio-quiet window (advertising hasn't ramped, nothing is connected), so
+/// init passes on the first try and finishes (~60 ms) long before any BLE
+/// bring-up. The R8 wedge protection is UNCHANGED: motion events still park
+/// behind the gate until the host link is ready; only the one-time init
+/// moved earlier. On reconnects the sensor is already Ready, so no init SPI
+/// lands in the bring-up window anyway — this only changes the FIRST boot.
+/// Must run after `patch_rmk_pmw3610_input_gate` (whose injected text this
+/// anchors on and reorders).
+fn patch_rmk_pmw3610_early_init() {
+    const MARKER: &str = "// kobu: PMW3610 early init before gate applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/input_device/pmw3610.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} input_device/pmw3610.rs; \
+             PMW3610 early-init patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"            Timer::after(self.poll_interval).await;
+
+            // kobu (round 8 Layer B): hold the ENTIRE pointer path (incl. the lazy
+            // first-motion SPI init burst) off the executor & radio until the host
+            // link is READY, so trackball motion at boot cannot contend with the
+            // Mac SMP/encryption handshake (the boot-wedge). GATED by default;
+            // opened by run_input_gate_central (central) or the HostReady split
+            // message (peripheral). Parks on a Signal so it is free while gated.
+            if crate::input_device::battery::KOBU_INPUT_GATED
+                .load(core::sync::atomic::Ordering::Relaxed)
+            {
+                crate::input_device::battery::KOBU_INPUT_GATE_WAKE.wait().await;
+                continue;
+            }
+
+            if self.init_state != InitState::Ready && !self.try_init().await {
+                continue;
+            }
+
+            if !self.sensor.motion_pending() {
+                continue;
+            }"#;
+    let to = r#"            Timer::after(self.poll_interval).await;
+
+            // kobu (early-init): initialize the sensor IMMEDIATELY at boot,
+            // BEFORE the input gate — power-on is the one reliably radio-quiet
+            // window, so the bit-banged init isn't torn by MPSL radio
+            // interrupts (the live-confirmed cause of long red retry periods:
+            // once the Mac link (15 ms) + split link (8.75 ms) are up, most
+            // init attempts get preempted mid-byte and fail their verify).
+            // The R8 wedge protection is unchanged: motion EVENTS stay gated
+            // below until the host link is ready — only the ~60 ms one-time
+            // init moved earlier, and on reconnects the sensor is already
+            // Ready so no init SPI lands in the bring-up window anyway.
+            if self.init_state != InitState::Ready {
+                let _ = self.try_init().await;
+                continue;
+            }
+
+            // kobu (round 8 Layer B): hold the ENTIRE pointer path off the
+            // executor & radio until the host link is READY, so trackball
+            // motion at boot cannot contend with the Mac SMP/encryption
+            // handshake (the boot-wedge). GATED by default; opened by
+            // run_input_gate_central (central) or the HostReady split message
+            // (peripheral). Parks on a Signal so it is free while gated.
+            if crate::input_device::battery::KOBU_INPUT_GATED
+                .load(core::sync::atomic::Ordering::Relaxed)
+            {
+                crate::input_device::battery::KOBU_INPUT_GATE_WAKE.wait().await;
+                continue;
+            }
+
+            if !self.sensor.motion_pending() {
+                continue;
+            }"#;
+
+    if !contents.contains(from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} pmw3610.rs read_event loop (gate+init+motion_pending) anchor missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_pmw3610_early_init",
             path.display()
         );
     }

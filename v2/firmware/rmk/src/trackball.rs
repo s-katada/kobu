@@ -45,6 +45,15 @@ use crate::config;
 /// the right-hand trackball is being moved.
 pub static PERIPHERAL_ACTIVITY: Signal<CriticalSectionRawMutex, ()> = Signal::new();
 
+/// Diagnostic (round 7, feature `led-ball-diag`): incremented every time
+/// [`ScrollProcessor`] actually emits a wheel HID report (the successful
+/// `try_send` branch). Read-and-reset by `config::take_scroll_emits()`;
+/// non-zero on a poll tick means the firmware emitted fine end-to-end, so a
+/// dead scroll with this still flashing points at macOS, not the firmware.
+/// Unconditional (cheap atomic add) so it always counts; only its LED
+/// consumption is feature-gated.
+pub static SCROLL_EMITS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
 // ─── Auto mouse layer ───────────────────────────────────────────────
 //
 // kobu's keymap reserves layer 4 as the mouse layer (MouseBtn1/2/3 etc.), but
@@ -760,6 +769,9 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                 {
                     self.scroll_acc -= units * SCROLL_STEP;
                     self.next_emit_at = Some(now + throttle);
+                    // kobu (round 7 ball-diag): count actual scroll emits so
+                    // led-ball-diag can flash BLUE (firmware fine end-to-end).
+                    SCROLL_EMITS.fetch_add(1, Ordering::Relaxed);
                 }
                 ProcessResult::Stop
             }
