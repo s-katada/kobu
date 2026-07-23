@@ -110,9 +110,9 @@
         "missing_tuning_profile": "warning",
         "net_conflict": "warning",
         "nonmirrored_text_on_back_layer": "warning",
-        "npth_inside_courtyard": "error",
+        "npth_inside_courtyard": "ignore",
         "padstack": "warning",
-        "pth_inside_courtyard": "error",
+        "pth_inside_courtyard": "ignore",
         "shorting_items": "error",
         "silk_edge_clearance": "warning",
         "silk_over_copper": "warning",
@@ -636,14 +636,6 @@
     "meta": {
       "version": 1
     },
-    "ngspice": {
-      "fix_include_paths": true,
-      "meta": {
-        "version": 0
-      },
-      "model_mode": 4,
-      "workbook_filename": ""
-    },
     "page_layout_descr_file": "",
     "plot_directory": "",
     "reuse_designators": true,
@@ -652,14 +644,19 @@
     "top_level_sheets": [
       {
         "filename": "right-main.kicad_sch",
-        "name": "right-main",
-        "uuid": "00000000-0000-0000-0000-000000000000"
+        "name": "ルート",
+        "uuid": "c7e1ce5a-538c-46c9-8fd0-498ee3cb093e"
       }
     ],
-    "used_designators": "",
+    "used_designators": "#PWR1,J1,SW1-16,D1-16",
     "variants": []
   },
-  "sheets": [],
+  "sheets": [
+    [
+      "c7e1ce5a-538c-46c9-8fd0-498ee3cb093e",
+      "ルート"
+    ]
+  ],
   "text_variables": {},
   "tuning_profiles": {
     "meta": {
