@@ -13,6 +13,7 @@ result-*
 # Editor
 .vscode/
 .idea/
+.history/
 
 # KiCad: auto-saves, lock files, fp cache, DRC/ERC reports
 **/_autosave-*
