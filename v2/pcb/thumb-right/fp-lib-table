@@ -1,0 +1,6 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "mcu_roba")(type "KiCad")(uri "${KIPRJMOD}/../../../v1/pcb/lib/mcu_roba.pretty")(options "")(descr "roBa-derived XIAO nRF52840 footprints (GPL-3.0)"))
+  (lib (name "sensor")(type "KiCad")(uri "${KIPRJMOD}/../../../v1/pcb/lib/sensor.pretty")(options "")(descr "PMW3610 mouse sensor footprint"))
+  (lib (name "custom")(type "KiCad")(uri "${KIPRJMOD}/../../../v1/pcb/lib/custom.pretty")(options "")(descr "TGSW MSK-12D19 power slide switch"))
+)
