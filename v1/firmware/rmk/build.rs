@@ -342,6 +342,18 @@ fn main() {
     // NEW rmk registry patches: `cargo clean --release -p rmk` once after pulling.
     patch_rmk_kobu_forward_carry_atomics();
     patch_rmk_peripheral_forward_carry();
+    // 2026-09-08 — central-side LOSS LEDGER + the stale-assumption fix it found.
+    // ble_server.rs bounds the mouse notify at 40 ms and `return Ok(0)` on
+    // timeout; its justification ("run_pointer_flush re-emits motion from its
+    // accumulator") is STALE — that task is gone and PointerProcessor already
+    // deducted the travel from pend_* when it handed the report over, so a
+    // timeout silently ate it. Hand the travel back and count every stage so
+    // the Mac can read a full ledger over Via 0xC0 (ids 0x20-0x28).
+    // NEW rmk registry patches: `cargo clean --release -p rmk` once.
+    patch_rmk_kobu_loss_ledger_atomics();
+    patch_rmk_hid_writer_drop_carry();
+    patch_rmk_central_event_drop_count();
+    patch_rmk_via_custom_get_loss_ledger();
 
     generate_vial_config();
 
@@ -8378,6 +8390,271 @@ fn patch_rmk_peripheral_forward_carry() {
         );
     }
     contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// kobu (2026-09-08 loss ledger): per-stage counters for the pointer path plus
+/// the give-back slots for travel the BLE HID writer had to drop. All live in
+/// rmk (registry) because the Via handler and ble_server.rs are rmk code and
+/// cannot see the kobu binary crate. Anchors on KOBU_SPLIT_FORWARD_DROPS, so
+/// patch_rmk_kobu_forward_carry_atomics must run first.
+fn patch_rmk_kobu_loss_ledger_atomics() {
+    const MARKER: &str = "// kobu: loss-ledger atomics applied";
+    const RMK_VERSION: &str = "0.8.2";
+    const ADDED: &str = "\n\n\
+// kobu (2026-09-08 loss ledger). Read-and-reset u16 counters polled ~1 Hz over\n\
+// Via 0xC0 (ids 0x20-0x24), so they are rates, and wrapping is harmless.\n\
+// ARRIVALS: pointer samples reaching the central (i.e. across the split link).\n\
+// EMITS/DEFERRALS: PointerProcessor reports that went out / were banked because\n\
+// the shared report channel was busy (deferrals are lossless coalescing).\n\
+// WRITER_DROPS: mouse notify calls that hit their 40 ms bound (lost delivery).\n\
+// CENTRAL_EVENT_DROPS: split/driver.rs drop-oldest evictions.\n\
+pub static KOBU_PTR_ARRIVALS: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);\n\
+pub static KOBU_PTR_EMITS: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);\n\
+pub static KOBU_PTR_DEFERRALS: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);\n\
+pub static KOBU_HID_WRITER_DROPS: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);\n\
+pub static KOBU_CENTRAL_EVENT_DROPS: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);\n\n\
+// Travel (HID counts) from mouse reports the writer dropped on its notify\n\
+// bound. PointerProcessor drains these into pend_* on its next sample, so the\n\
+// cursor still lands where the ball went instead of under-travelling.\n\
+pub static KOBU_HID_DROP_DX: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);\n\
+pub static KOBU_HID_DROP_DY: core::sync::atomic::AtomicI32 = core::sync::atomic::AtomicI32::new(0);";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/input_device/battery.rs") else {
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+    let anchor = "pub static KOBU_SPLIT_FORWARD_DROPS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);";
+    if contents.matches(anchor).count() != 1 {
+        panic!(
+            "kobu: expected exactly one KOBU_SPLIT_FORWARD_DROPS anchor in rmk-{RMK_VERSION} input_device/battery.rs at {}; \
+             patch_rmk_kobu_forward_carry_atomics must run first — check order in build.rs::main",
+            path.display()
+        );
+    }
+    let mut injected = String::from(anchor);
+    injected.push_str(ADDED);
+    contents = contents.replace(anchor, &injected);
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// kobu (2026-09-08): stop the BLE HID writer from EATING pointer travel when
+/// its 40 ms notify bound expires.
+///
+/// The bound itself is the round-10 wedge fix and must stay: a blocked notify
+/// on the shared, credit-starved outbound queue would park the writer, and keys
+/// share that writer. But the comment justifying the silent drop
+/// ("run_pointer_flush re-emits motion from its accumulator") describes a task
+/// that no longer exists: PointerProcessor now emits inline and subtracts the
+/// emitted travel from pend_* the moment try_send succeeds, so a dropped report
+/// takes its travel with it. That is invisible under-travel — the measured
+/// もっさり. Give the travel back through KOBU_HID_DROP_D{X,Y} (drained by
+/// PointerProcessor on its next sample) and count the drops.
+fn patch_rmk_hid_writer_drop_carry() {
+    const MARKER: &str = "// kobu: hid writer drop carry applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/ble/ble_server.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} ble/ble_server.rs; \
+             hid writer drop carry patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    // Both mouse arms have `mouse_report` in scope (i8 x/y in the narrow arm,
+    // i16 in the wide one); `as i32` covers both. The two arms differ only in
+    // their error message, which is what makes each anchor unique.
+    const GIVE_BACK: &str = r#"                    Err(_) => {
+                        // kobu (2026-09-08): hand the dropped travel back instead of
+                        // eating it — PointerProcessor folds it into its next sample.
+                        crate::input_device::battery::KOBU_HID_DROP_DX
+                            .fetch_add(mouse_report.x as i32, core::sync::atomic::Ordering::Relaxed);
+                        crate::input_device::battery::KOBU_HID_DROP_DY
+                            .fetch_add(mouse_report.y as i32, core::sync::atomic::Ordering::Relaxed);
+                        crate::input_device::battery::KOBU_HID_WRITER_DROPS
+                            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        return Ok(0);
+                    }
+                };"#;
+
+    for label in ["mouse report", "wide mouse report"] {
+        let from = format!(
+            "                        error!(\"Failed to notify {label}: {{:?}}\", e);\n\
+             \x20                       HidError::BleError\n\
+             \x20                   }})?,\n\
+             \x20                   Err(_) => return Ok(0),\n\
+             \x20               }};"
+        );
+        if contents.matches(&from).count() != 1 {
+            panic!(
+                "kobu: expected exactly one '{label}' notify-timeout anchor in rmk-{RMK_VERSION} ble/ble_server.rs at {}; \
+                 upstream or an earlier patch may have changed — update firmware/build.rs::patch_rmk_hid_writer_drop_carry",
+                path.display()
+            );
+        }
+        let to = format!(
+            "                        error!(\"Failed to notify {label}: {{:?}}\", e);\n\
+             \x20                       HidError::BleError\n\
+             \x20                   }})?,\n{GIVE_BACK}"
+        );
+        contents = contents.replace(&from, &to);
+    }
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// kobu (2026-09-08 loss ledger): count the central peripheral-manager's
+/// drop-oldest evictions on EVENT_CHANNEL. Behaviour unchanged — this only
+/// makes the stage visible, so the Via ledger can prove it is (or is not) part
+/// of the measured pointer-sample loss.
+fn patch_rmk_central_event_drop_count() {
+    const MARKER: &str = "// kobu: central event drop-oldest counter applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/split/driver.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} split/driver.rs; \
+             central event drop counter patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    const FROM: &str = "                        if EVENT_CHANNEL.is_full() {\n                            let _ = EVENT_CHANNEL.receive().await;\n                        }";
+    const TO: &str = "                        if EVENT_CHANNEL.is_full() {\n                            // kobu (2026-09-08 loss ledger): drop-oldest is upstream\n                            // behaviour; just make it countable (Via 0xC0 id 0x24).\n                            crate::input_device::battery::KOBU_CENTRAL_EVENT_DROPS\n                                .fetch_add(1, core::sync::atomic::Ordering::Relaxed);\n                            let _ = EVENT_CHANNEL.receive().await;\n                        }";
+    if contents.matches(FROM).count() != 1 {
+        panic!(
+            "kobu: expected exactly one EVENT_CHANNEL drop-oldest anchor in rmk-{RMK_VERSION} split/driver.rs at {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_central_event_drop_count",
+            path.display()
+        );
+    }
+    contents = contents.replace(FROM, TO);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// kobu (2026-09-08): expose the loss ledger over the existing Via Custom
+/// Channel 0xC0 as read-and-reset u16 counters, so a host-side poller can
+/// account for every pointer sample: produced (left ball) / arrived at the
+/// central (right ball, across the split link) / emitted / deferred / dropped
+/// by the writer / evicted by drop-oldest, against the reports the Mac actually
+/// receives. Additive on the v3 handler; anchors on the 0x11 arm + fallback.
+fn patch_rmk_via_custom_get_loss_ledger() {
+    const MARKER: &str = "// kobu: via CustomGetValue loss ledger (ids 0x20-0x28) applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/host/via/mod.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} host/via/mod.rs; \
+             via loss-ledger patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    const FROM: &str = "                        0x11 => {\n                            report.input_data[3] = kp.load(Ordering::Relaxed);\n                        }\n                        _ => {\n                            warn!(\"kobu: unknown CustomGetValue id 0x{:02X} on channel 0xC0\", id);\n                        }";
+    const TO: &str = r#"                        0x11 => {
+                            report.input_data[3] = kp.load(Ordering::Relaxed);
+                        }
+                        // kobu (2026-09-08 loss ledger) — read-and-reset u16, big
+                        // endian in input_data[3..5]. Poll at a steady cadence and
+                        // read each value as "per poll interval".
+                        0x20..=0x27 => {
+                            let v: u16 = match id {
+                                // pointer samples that reached the central
+                                0x20 => crate::input_device::battery::KOBU_PTR_ARRIVALS.swap(0, Ordering::Relaxed),
+                                // pointer reports handed to the HID writer
+                                0x21 => crate::input_device::battery::KOBU_PTR_EMITS.swap(0, Ordering::Relaxed),
+                                // pointer reports banked because the channel was busy
+                                0x22 => crate::input_device::battery::KOBU_PTR_DEFERRALS.swap(0, Ordering::Relaxed),
+                                // mouse notify calls that hit the 40 ms bound
+                                0x23 => crate::input_device::battery::KOBU_HID_WRITER_DROPS.swap(0, Ordering::Relaxed),
+                                // split/driver.rs EVENT_CHANNEL drop-oldest evictions
+                                0x24 => crate::input_device::battery::KOBU_CENTRAL_EVENT_DROPS.swap(0, Ordering::Relaxed),
+                                // this binary's own PMW3610: 0xff frames rejected
+                                0x25 => crate::input_device::battery::KOBU_BALL_FF_REJECTS
+                                    .swap(0, Ordering::Relaxed)
+                                    .min(u16::MAX as u32) as u16,
+                                // this binary's own PMW3610: non-zero motion samples
+                                0x26 => crate::input_device::battery::KOBU_PERIPHERAL_SAMPLES
+                                    .swap(0, Ordering::Relaxed)
+                                    .min(u16::MAX as u32) as u16,
+                                // bounded split forwards that carried instead of sending
+                                _ => crate::input_device::battery::KOBU_SPLIT_FORWARD_DROPS
+                                    .swap(0, Ordering::Relaxed)
+                                    .min(u16::MAX as u32) as u16,
+                            };
+                            report.input_data[3] = (v >> 8) as u8;
+                            report.input_data[4] = (v & 0xFF) as u8;
+                        }
+                        // live host connection interval, in units of 100 us (not reset)
+                        0x28 => {
+                            let v = (crate::input_device::battery::KOBU_HOST_CONN_INTERVAL_US
+                                .load(Ordering::Relaxed)
+                                / 100)
+                                .min(u16::MAX as u32) as u16;
+                            report.input_data[3] = (v >> 8) as u8;
+                            report.input_data[4] = (v & 0xFF) as u8;
+                        }
+                        _ => {
+                            warn!("kobu: unknown CustomGetValue id 0x{:02X} on channel 0xC0", id);
+                        }"#;
+    if contents.matches(FROM).count() != 1 {
+        panic!(
+            "kobu: expected exactly one CustomGetValue 0x11+fallback anchor in rmk-{RMK_VERSION} host/via/mod.rs at {}; \
+             patch_rmk_via_custom_get_kobu must run first — check order in build.rs::main",
+            path.display()
+        );
+    }
+    contents = contents.replace(FROM, TO);
 
     contents.push('\n');
     contents.push_str(MARKER);
