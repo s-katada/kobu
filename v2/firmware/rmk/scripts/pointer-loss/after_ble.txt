@@ -1,0 +1,5 @@
+# open result: 0xe00002c5 (0 = ok, 0xe00002e2 = not permitted)
+# device: kobu2 usagePage=1 usage=2 transport=USB
+# device: kobu2 usagePage=65376 usage=97 transport=USB
+# device: kobu2 usagePage=1 usage=6 transport=USB
+# start 1788880245.641051
