@@ -331,6 +331,17 @@ fn main() {
     // 入れる。NEW registry patches ⇒ one `cargo clean --release -p rmk` first.
     patch_rmk_usb_hid_ready_flag();
     patch_rmk_usb_takes_over_ble();
+    // 2026-09-08 — travel-conserving split forward. Round 8 Layer A bounded the
+    // peripheral's pointer forward to 20 ms but `let _ =` DISCARDED the sample
+    // that missed it; a host-side HID capture (IOHIDManager, this Mac) measured
+    // ~12% of right-ball samples lost in fast motion with NO catch-up in the
+    // next report = the "もっさり" under-travel. Carry the dropped X/Y counts
+    // into the next pointer sample instead, and count carries. Anchors on the
+    // round-7/round-8 patched text, so both must run after
+    // patch_rmk_kobu_ball_diag_atomics and patch_rmk_timeout_peripheral_event_write.
+    // NEW rmk registry patches: `cargo clean --release -p rmk` once after pulling.
+    patch_rmk_kobu_forward_carry_atomics();
+    patch_rmk_peripheral_forward_carry();
 
     generate_vial_config();
 
@@ -8173,6 +8184,204 @@ fn patch_rmk_usb_takes_over_ble() {
     contents.push_str(MARKER);
     contents.push('\n');
 
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// kobu (2026-09-08): inject `KOBU_SPLIT_FORWARD_DROPS`, a per-binary counter of
+/// pointer samples whose bounded (20 ms) split forward missed its deadline on
+/// the peripheral (see patch_rmk_peripheral_forward_carry). Their X/Y counts are
+/// carried into the next sample, so this counts CARRIED samples, not lost
+/// travel. Diagnostic only for now (read it from a diag build or expose it over
+/// Via later). Anchors on the round-7 ball-diag static so it lands next to the
+/// other per-ball counters; patch_rmk_kobu_ball_diag_atomics must run first.
+fn patch_rmk_kobu_forward_carry_atomics() {
+    const MARKER: &str = "// kobu: split-forward carry atomics applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/input_device/battery.rs") else {
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let anchor = "pub static KOBU_BALL_INIT_READY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);";
+    if contents.matches(anchor).count() != 1 {
+        panic!(
+            "kobu: expected exactly one KOBU_BALL_INIT_READY anchor in rmk-{RMK_VERSION} input_device/battery.rs at {}; \
+             patch_rmk_kobu_ball_diag_atomics must run first — check order in build.rs::main",
+            path.display()
+        );
+    }
+    let injected = format!(
+        "{anchor}\n\n\
+         // kobu (2026-09-08 travel-conserving forward): number of pointer samples\n\
+         // whose bounded split write missed the 20 ms deadline on the peripheral\n\
+         // and whose X/Y counts were therefore CARRIED into the next sample (see\n\
+         // patch_rmk_peripheral_forward_carry). Diagnostic only.\n\
+         pub static KOBU_SPLIT_FORWARD_DROPS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);"
+    );
+    contents = contents.replace(anchor, &injected);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// kobu (2026-09-08): travel-conserving peripheral Event forward.
+///
+/// Round 8 Layer A bounded the peripheral's split forward to 20 ms so a
+/// credit-starved link could never park the pipeline (keys, central messages).
+/// The bound is right, but the `let _ =` also DISCARDED the pointer sample that
+/// missed it. A host-side HID capture on 2026-09-08 showed ~12% of right-ball
+/// samples vanishing during fast motion with no catch-up in the following
+/// report (magnitude ratio after a 30 ms gap = 1.0 instead of 2.0) — exactly
+/// the under-travel the user feels as もっさり. Keep the 20 ms bound, but carry
+/// the dropped sample's X/Y counts into the next pointer sample (capped at
+/// ±1200 counts ≈ 5 cm at 600 CPI, cleared while the link is down) and count
+/// the carries in KOBU_SPLIT_FORWARD_DROPS. Anchors on the round-8 patched
+/// text, so patch_rmk_timeout_peripheral_event_write must run first.
+fn patch_rmk_peripheral_forward_carry() {
+    const MARKER: &str = "// kobu: travel-conserving peripheral forward applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/split/peripheral.rs") else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} split/peripheral.rs; \
+             travel-conserving peripheral forward patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    // (a) carry state, declared once per `run()` (i.e. per split connection).
+    let loop_from = r#"        loop {
+            match select3(
+                self.split_driver.read(),
+                KEY_EVENT_CHANNEL.receive(),
+                EVENT_CHANNEL.receive(),
+            )"#;
+    let loop_to = r#"        // kobu (travel-conserving forward): X/Y counts of pointer samples that
+        // missed the bounded split write, carried into the next pointer sample.
+        let mut __kobu_carry: (i32, i32) = (0, 0);
+        loop {
+            match select3(
+                self.split_driver.read(),
+                KEY_EVENT_CHANNEL.receive(),
+                EVENT_CHANNEL.receive(),
+            )"#;
+    if contents.matches(loop_from).count() != 1 {
+        panic!(
+            "kobu: expected exactly one peripheral run-loop anchor in rmk-{RMK_VERSION} split/peripheral.rs at {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_peripheral_forward_carry",
+            path.display()
+        );
+    }
+    contents = contents.replace(loop_from, loop_to);
+
+    // (b) the forward itself: anchors on the round-8 Layer A text.
+    let from = r#"                        debug!("Writing split event to central: {:?}", e);
+                        // kobu (round 8 Layer A): bound this forward so a credit-
+                        // starved split link DROPS the pointer sample rather than
+                        // parking the peripheral pipeline.
+                        let _ = ::embassy_time::with_timeout(
+                            ::embassy_time::Duration::from_millis(20),
+                            self.split_driver.write(&SplitMessage::Event(e)),
+                        )
+                        .await;
+                    } else {
+                        debug!("Connection not established, skipping event");"#;
+    let to = r#"                        debug!("Writing split event to central: {:?}", e);
+                        // kobu (round 8 Layer A): bound this forward so a credit-
+                        // starved split link never parks the peripheral pipeline
+                        // (keys and central messages keep flowing).
+                        // kobu (2026-09-08 travel-conserving forward): a pointer
+                        // sample that misses the 20 ms bound is no longer discarded:
+                        // its X/Y counts are carried into the next pointer sample,
+                        // so the cursor still lands where the ball went (one late,
+                        // larger step instead of silent under-travel). Capped, and
+                        // cleared while the link is down.
+                        let mut __kobu_e = e;
+                        if let crate::event::Event::Joystick(ref mut __kobu_axes) = __kobu_e {
+                            if __kobu_carry != (0, 0) {
+                                for __kobu_a in __kobu_axes.iter_mut() {
+                                    match __kobu_a.axis {
+                                        crate::event::Axis::X => {
+                                            __kobu_a.value = __kobu_a.value.saturating_add(
+                                                __kobu_carry.0.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                                            );
+                                        }
+                                        crate::event::Axis::Y => {
+                                            __kobu_a.value = __kobu_a.value.saturating_add(
+                                                __kobu_carry.1.clamp(i16::MIN as i32, i16::MAX as i32) as i16,
+                                            );
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                __kobu_carry = (0, 0);
+                            }
+                        }
+                        let __kobu_sent = matches!(
+                            ::embassy_time::with_timeout(
+                                ::embassy_time::Duration::from_millis(20),
+                                self.split_driver.write(&SplitMessage::Event(__kobu_e)),
+                            )
+                            .await,
+                            Ok(Ok(_))
+                        );
+                        if !__kobu_sent {
+                            if let crate::event::Event::Joystick(__kobu_axes) = __kobu_e {
+                                const KOBU_CARRY_MAX: i32 = 1200;
+                                for __kobu_a in __kobu_axes.iter() {
+                                    match __kobu_a.axis {
+                                        crate::event::Axis::X => {
+                                            __kobu_carry.0 = (__kobu_carry.0 + __kobu_a.value as i32)
+                                                .clamp(-KOBU_CARRY_MAX, KOBU_CARRY_MAX);
+                                        }
+                                        crate::event::Axis::Y => {
+                                            __kobu_carry.1 = (__kobu_carry.1 + __kobu_a.value as i32)
+                                                .clamp(-KOBU_CARRY_MAX, KOBU_CARRY_MAX);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                crate::input_device::battery::KOBU_SPLIT_FORWARD_DROPS
+                                    .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                    } else {
+                        // kobu (travel-conserving forward): link down — stale travel
+                        // must not jump the cursor once the link is back.
+                        __kobu_carry = (0, 0);
+                        debug!("Connection not established, skipping event");"#;
+    if contents.matches(from).count() != 1 {
+        panic!(
+            "kobu: expected exactly one round-8 bounded Event forward anchor in rmk-{RMK_VERSION} split/peripheral.rs at {}; \
+             patch_rmk_timeout_peripheral_event_write must run first — check order in build.rs::main",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
     fs::write(&path, contents).unwrap_or_else(|e| {
         panic!("kobu: failed to write {}: {e}", path.display());
     });
