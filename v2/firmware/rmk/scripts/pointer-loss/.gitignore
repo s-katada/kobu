@@ -1,0 +1,6 @@
+# built from the .swift sources by the README's build line
+hidlog
+ledger
+# capture output; only the committed baseline report is tracked
+*.txt
+!baseline-*.report.txt
