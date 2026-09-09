@@ -11,7 +11,10 @@
 //   EVDR   split/driver.rs EVENT_CHANNEL drop-oldest evictions
 //   FF     this binary's PMW3610 0xff frames rejected (left ball on central)
 //   LSMP   this binary's PMW3610 non-zero motion samples (left ball)
-//   FWD    bounded split forwards that carried instead of sending (peripheral)
+//   FWD    ALWAYS 0 when read from the central: the counter is incremented in
+//          SplitPeripheral::run, which runs only in the peripheral binary, and
+//          the KOBU_* statics are per-binary. The right half's counters are not
+//          forwarded over the split link, so this column cannot see them.
 //   INT    live host connection interval in ms
 //   BATL   left/central battery %
 //   BATR   right/peripheral battery % (0 = the right half has never reported,
@@ -39,6 +42,7 @@ guard let devs = IOHIDManagerCopyDevices(mgr) as? Set<IOHIDDevice>, let dev = de
 }
 let transport = IOHIDDeviceGetProperty(dev, kIOHIDTransportKey as CFString) as? String ?? "?"
 print("# kobu2 raw HID open, transport=\(transport)")
+print("# note: FWD always reads 0 here — it lives in the peripheral binary and is not forwarded over the split link")
 print("# " + (["time"] + names).map { $0.padding(toLength: 6, withPad: " ", startingAt: 0) }.joined())
 
 var inbuf = [UInt8](repeating: 0, count: 32)
