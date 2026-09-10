@@ -354,6 +354,13 @@ fn main() {
     patch_rmk_hid_writer_drop_carry();
     patch_rmk_central_event_drop_count();
     patch_rmk_via_custom_get_loss_ledger();
+    // 2026-09-10 — status-LED BLE feedback. A BONDED reconnect re-encrypts
+    // from the stored LTK and raises no PairingComplete, so rmk's `connected`
+    // flag stayed false and `ControllerEvent::BleState(_, Connected)` was
+    // never published: the new waiting-blink would have blinked straight
+    // through a live link. Set the flag in the round-7 encryption arm too.
+    // Anchors on patch_rmk_set_host_connected's text, so it must run after.
+    patch_rmk_publish_connected_on_bonded_reconnect();
 
     generate_vial_config();
 
@@ -8651,6 +8658,60 @@ fn patch_rmk_via_custom_get_loss_ledger() {
         panic!(
             "kobu: expected exactly one CustomGetValue 0x11+fallback anchor in rmk-{RMK_VERSION} host/via/mod.rs at {}; \
              patch_rmk_via_custom_get_kobu must run first — check order in build.rs::main",
+            path.display()
+        );
+    }
+    contents = contents.replace(FROM, TO);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// kobu (2026-09-10): publish `BleState::Connected` on a BONDED reconnect.
+///
+/// rmk only sets its `connected` flag in the `PairingComplete` arm, and that
+/// flag is the sole gate on the `ControllerEvent::BleState(_, Connected)`
+/// publish at the bottom of the gatt loop. A bonded reconnect re-encrypts
+/// from the stored LTK without a fresh pairing, so on the far more common
+/// path — the Mac coming back, or switching to a profile you have used
+/// before — no Connected event was ever emitted. `status_led.rs` drives its
+/// "waiting for a host" blue blink off exactly these events (the
+/// `KOBU_HOST_CONNECTED` atomic cannot be used: a profile switch drops the
+/// connection future without a `Disconnected` event and leaves it
+/// stale-true), so without this the LED would blink over a working link.
+///
+/// Set the flag in the round-7 encryption arm as well. The publish block is
+/// already idempotent via `published_connected_state`, so this cannot double-
+/// publish. Anchors on patch_rmk_set_host_connected's injected text.
+fn patch_rmk_publish_connected_on_bonded_reconnect() {
+    const MARKER: &str = "// kobu: publish Connected on bonded reconnect applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_ble_mod(RMK_VERSION) else {
+        println!(
+            "cargo:warning=kobu: could not find rmk-{RMK_VERSION} ble/mod.rs; \
+             bonded-reconnect Connected publish patch was not applied"
+        );
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    const FROM: &str = "                            // fresh PairingComplete; macOS reads GATT right after).\n                            crate::input_device::battery::KOBU_HOST_CONNECTED\n                                .store(true, Ordering::Release);\n                            None";
+    const TO: &str = "                            // fresh PairingComplete; macOS reads GATT right after).\n                            crate::input_device::battery::KOBU_HOST_CONNECTED\n                                .store(true, Ordering::Release);\n                            // kobu (2026-09-10): mark rmk's own controller flag\n                            // too, so BleState::Connected is published on this\n                            // path as well — the status LED's waiting blink ends\n                            // on that event. The publish block below is guarded\n                            // by `published_connected_state`, so this is safe to\n                            // hit on every encrypted read.\n                            #[cfg(feature = \"controller\")]\n                            {\n                                connected = true;\n                            }\n                            None";
+    if contents.matches(FROM).count() != 1 {
+        panic!(
+            "kobu: expected exactly one round-7 encrypted-read anchor in rmk-{RMK_VERSION} ble/mod.rs at {}; \
+             patch_rmk_set_host_connected must run first — check order in build.rs::main",
             path.display()
         );
     }

@@ -12,22 +12,43 @@
 //!    on its first call and the kobu-patched `BatteryProcessor` publishes on
 //!    every sample, so the color is available within ~1 s of boot.
 //!
-//! 2. **PC-connect flash** — 1 s of blue on the not-connected → connected
-//!    edge of the HOST link (BLE encrypted, or a USB cable appearing after
-//!    boot); seeded with VBUS at construction so booting on USB does not
-//!    flash. The split (right-half) link gets NO indication, connected or
-//!    not — the 08-13 solid-red alarm and solid-blue link colors were
-//!    removed by the 2026-08-14 user spec (no continuous glow).
+//! 2. **Connect confirmation** — solid blue when a host link comes up:
+//!    [`BLE_CONNECT_SOLID`] on rmk's `BleState::Connected`, and
+//!    [`HOST_CONNECT_FLASH`] on the encryption / USB-cable edge (seeded with
+//!    VBUS at construction so booting on USB does not flash). Whichever
+//!    lands first wins and a later one only ever EXTENDS the hold, never
+//!    cuts it short. The split (right-half) link gets NO indication —
+//!    the 08-13 solid-red alarm and solid-blue link colors were removed by
+//!    the 2026-08-14 user spec.
 //!
-//! 3. **Layer indicator** — whenever a NON-base layer is active the LED
+//! 3. **BLE waiting blink** (2026-09-10) — while the BLE stack is advertising
+//!    and no host has answered yet, the LED blinks blue at
+//!    [`BLE_WAIT_BLINK_PERIOD`]. It covers a profile switch (the layer-3
+//!    BT_SEL keys), a reconnect after the host went away, and boot. It
+//!    deliberately outranks the layer indicator: the profile keys live on
+//!    layer 3, whose cyan would otherwise paint over the very feedback the
+//!    user pressed them to get — the reason the previous firmware left
+//!    「接続したかどうか、待機中なのかどうかよくわからない」. Bounded by
+//!    [`BLE_WAIT_MAX`] so a host that never answers cannot blink the battery
+//!    down; the waiting STATE outlives the cap, so a late connect still gets
+//!    the long solid confirmation.
+//!
+//!    The wait is started and ended by rmk's own `BleState` events, NOT by
+//!    `config::host_connected()`: switching profiles drops the connection
+//!    future without a `Disconnected` event, so that atomic stays stale-true
+//!    across exactly the switch this indicator exists for.
+//!
+//! 4. **Layer indicator** — whenever a NON-base layer is active the LED
 //!    lights in that layer's color (see [`layer_color`]), including the
 //!    auto-mouse layer 4 (purple). This is the only sustained light, and
 //!    only while the layer is held/toggled.
 //!
-//! 4. Otherwise: **dark**.
+//! 5. Otherwise: **dark**.
 //!
-//! Typical boot reads as: battery color (~1 s) → dark → blue blink when the
-//! Mac link comes up → dark. Layer holds paint their color.
+//! Typical boot reads as: battery color (~1 s) → blue blink while the Mac
+//! link is being (re)established → 3 s of solid blue once it is up → dark.
+//! A profile switch reads the same way from the blink onwards. Layer holds
+//! paint their color.
 //!
 //! The R/G/B GPIOs (P0.26 / P0.30 / P0.06) are common-anode: pin LOW = on.
 //!
@@ -46,6 +67,25 @@ use crate::config;
 /// sample's arrival so it is always fully visible). 1 s per the 2026-08-14
 /// user spec — a quick glance, not a lingering display.
 const BOOT_BATTERY_WINDOW: Duration = Duration::from_secs(1);
+
+/// Period of the blue "waiting for a BLE host" blink: 400 ms = 2.5 Hz. Fast
+/// enough to read as "working on it", slow enough not to look like a fault.
+const BLE_WAIT_BLINK_PERIOD: Duration = Duration::from_millis(400);
+
+/// How long the waiting blink may run. rmk keeps advertising for 300 s and
+/// then sleeps; blinking that whole time would drain the battery for nothing,
+/// and by a minute in the answer is already "it is not connecting". Only the
+/// BLINK stops here — `ble_waiting` stays set, so a late connect is still
+/// confirmed with the long solid.
+const BLE_WAIT_MAX: Duration = Duration::from_secs(60);
+
+/// Solid blue when a connection ENDS a waiting phase (profile switch,
+/// reconnect, boot): long enough to read as steady light next to the blink.
+const BLE_CONNECT_SOLID: Duration = Duration::from_secs(3);
+
+/// Solid blue for a connect edge with no preceding wait — plugging in USB,
+/// say. The 2026-08-14 spec's 1 s, unchanged.
+const HOST_CONNECT_FLASH: Duration = Duration::from_millis(1000);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Color {
@@ -119,6 +159,14 @@ pub enum LedEvent {
     /// Split link to the RIGHT half established (`true`) / down (`false`).
     SplitConnected(bool),
     Layer(u8),
+    /// The BLE stack started advertising and is waiting for a host: a profile
+    /// switch, a reconnect, or boot. Starts the blue blink.
+    BleWaiting,
+    /// A host answered. Ends the blink and shows the solid confirmation.
+    BleConnected,
+    /// BLE is out of the picture — USB took over, or advertising timed out
+    /// and the stack went to sleep. Ends the blink with no confirmation.
+    BleResolved,
 }
 
 pub struct StatusLedController<'d> {
@@ -148,8 +196,14 @@ pub struct StatusLedController<'d> {
     /// construction so a USB cable already present at power-on does not
     /// count as a fresh "PC connected" event.
     host_seen: bool,
-    /// Instant after which the 1 s blue "PC connected" flash goes dark.
+    /// Instant after which the solid blue "connected" confirmation goes dark.
     blue_until: Instant,
+    /// True while BLE is advertising with no host yet (blue blink). Set by
+    /// `ControllerEvent::BleState(_, Advertising)` and by a profile change,
+    /// cleared once the host link is actually up (or USB takes over).
+    ble_waiting: bool,
+    /// Instant after which the waiting BLINK stops (the state itself stays).
+    ble_wait_until: Instant,
     /// First `target_color` evaluation — the LED self-test runs relative to
     /// this, NOT to absolute uptime: the polling loop only starts after the
     /// whole entry init (embassy + SDC + storage), which can exceed the
@@ -184,6 +238,10 @@ impl<'d> StatusLedController<'d> {
             host_seen: config::vbus_present(),
             // In the past: no flash pending at boot.
             blue_until: Instant::now(),
+            // Boot is itself a waiting phase; rmk announces Advertising (and
+            // the loaded profile) within milliseconds, which re-arms the cap.
+            ble_waiting: false,
+            ble_wait_until: Instant::now(),
             selftest_start: None,
             current: Color::Off,
             samples_accum: 0,
@@ -218,7 +276,15 @@ impl<'d> StatusLedController<'d> {
         // "PC connected" = BLE link encrypted OR a USB cable appearing.
         let host_now = config::host_connected() || config::vbus_present();
         if host_now && !self.host_seen {
-            self.blue_until = Instant::now() + Duration::from_millis(1000);
+            self.hold_solid(HOST_CONNECT_FLASH);
+        }
+        if config::vbus_present() {
+            // A cable is physically in: BLE is parked, so there is nothing to
+            // wait for. This is a live GPIO read, unlike `host_connected()`,
+            // which a profile switch leaves stale-true (rmk drops the
+            // connection future without a `Disconnected` event) — precisely
+            // the moment this indicator has to keep blinking.
+            self.ble_waiting = false;
         }
         self.host_seen = host_now;
         // The 1 s "PC connected" flash is the freshest news — it interrupts
@@ -262,6 +328,18 @@ impl<'d> StatusLedController<'d> {
                 return Color::Green;
             }
             return base;
+        }
+        // BLE waiting blink. Deliberately ABOVE the layer indicator: the
+        // BT_SEL keys live on layer 3, so its cyan would paint over exactly
+        // the feedback the user pressed them to get. Below the boot battery
+        // window, so the boot narrative (charge state first) survives.
+        if self.ble_waiting && Instant::now() < self.ble_wait_until {
+            let period = BLE_WAIT_BLINK_PERIOD.as_millis();
+            return if Instant::now().as_millis() % period < period / 2 {
+                Color::Blue
+            } else {
+                Color::Off
+            };
         }
         // NOTE: no disconnected-red and no steady link color — removed by the
         // 2026-08-14 user spec (「未接続の場合赤に光らせる必要もありません」).
@@ -397,6 +475,16 @@ impl<'d> StatusLedController<'d> {
         self.apply(color);
     }
 
+    /// Show solid blue for at least `d` from now. Extend-only: a 1 s
+    /// encryption-edge flash landing inside a 3 s BLE-connect confirmation
+    /// must not cut it short.
+    fn hold_solid(&mut self, d: Duration) {
+        let until = Instant::now() + d;
+        if until > self.blue_until {
+            self.blue_until = until;
+        }
+    }
+
     fn apply(&mut self, color: Color) {
         // No "already showing this color" early-return: pins are re-asserted
         // on every call (≤ every 50 ms tick, 3 GPIO writes — free), so
@@ -460,6 +548,19 @@ impl<'d> Controller for StatusLedController<'d> {
             LedEvent::Layer(layer) => {
                 self.layer = layer;
             }
+            LedEvent::BleWaiting => {
+                // Re-arm on every announcement: rmk republishes Advertising at
+                // the top of each attempt, and a profile switch lands here too.
+                self.ble_waiting = true;
+                self.ble_wait_until = Instant::now() + BLE_WAIT_MAX;
+            }
+            LedEvent::BleConnected => {
+                self.ble_waiting = false;
+                self.hold_solid(BLE_CONNECT_SOLID);
+            }
+            LedEvent::BleResolved => {
+                self.ble_waiting = false;
+            }
         }
         if cfg!(feature = "led-ball-diag") {
             // Diagnostic mode: the ball-diag band is driven by update() every
@@ -489,6 +590,20 @@ impl<'d> Controller for StatusLedController<'d> {
                     return LedEvent::SplitConnected(connected);
                 }
                 ControllerEvent::Layer(layer) => return LedEvent::Layer(layer),
+                // BLE link state, the authoritative source for this
+                // indicator. `Advertising` is republished at the top of every
+                // attempt, so a profile switch, a reconnect and boot all
+                // arrive here; `Connected` ends the wait; `None` means USB
+                // took over or advertising timed out into sleep.
+                ControllerEvent::BleState(_profile, state) => match state {
+                    rmk::ble::BleState::Advertising => return LedEvent::BleWaiting,
+                    rmk::ble::BleState::Connected => return LedEvent::BleConnected,
+                    rmk::ble::BleState::None => return LedEvent::BleResolved,
+                },
+                // A profile switch (layer-3 BT_SEL) tears the current link
+                // down and re-advertises; start blinking at the keypress
+                // rather than waiting for the stack to come round.
+                ControllerEvent::BleProfile(_profile) => return LedEvent::BleWaiting,
                 _ => continue,
             }
         }
