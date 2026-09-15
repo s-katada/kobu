@@ -14,13 +14,17 @@
 //! The trick: wrap the central-local device with [`AxisRelabel`] so its
 //! Joystick events go out tagged with `Axis::H` / `Axis::V` instead of
 //! `Axis::X` / `Axis::Y`. Peripheral events still arrive with X/Y. The
-//! processor chain is `[ScrollProcessor, PointerProcessor]`:
+//! processor chain is
+//! `[PeriphScrollRelabel, ScrollProcessor, PointerProcessor]`:
 //!
-//! * [`ScrollProcessor`] matches H/V (central-local) → MouseReport wheel
+//! * [`PeriphScrollRelabel`] (while H+J held) rewrites peripheral X/Y → H/V
+//! * [`ScrollProcessor`] matches H/V (central-local, or right ball on H+J hold)
+//!   → MouseReport wheel
 //! * [`PointerProcessor`] matches X/Y (peripheral-forwarded) → MouseReport x/y
 //!
 //! Each processor returns `Stop` once it matches its axes, so the chain
-//! routes deterministically.
+//! routes deterministically. Releasing H+J clears the hold flag and the
+//! right ball returns to pointer mode.
 
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -674,6 +678,65 @@ impl<D: InputDevice> InputDevice for AxisRelabel<D> {
             }
         }
         event
+    }
+}
+
+/// While the H+J combo is held (`config::periph_as_scroll`), rewrite
+/// peripheral Joystick X/Y → H/V so [`ScrollProcessor`] (next in the chain)
+/// claims the right ball as scroll. Y is negated so finger-up scrolls up —
+/// matching the pointer path's "right half is mounted mirrored" convention.
+/// Left-ball events are already H/V (via [`AxisRelabel`]) and pass through
+/// unchanged. When the combo is released the flag clears and events stay
+/// X/Y for [`PointerProcessor`].
+pub struct PeriphScrollRelabel<
+    'a,
+    const ROW: usize,
+    const COL: usize,
+    const NUM_LAYER: usize,
+    const NUM_ENCODER: usize,
+> {
+    keymap: &'a RefCell<KeyMap<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>>,
+}
+
+impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCODER: usize>
+    PeriphScrollRelabel<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>
+{
+    pub fn new(keymap: &'a RefCell<KeyMap<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>>) -> Self {
+        Self { keymap }
+    }
+}
+
+impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_ENCODER: usize>
+    InputProcessor<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>
+    for PeriphScrollRelabel<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>
+{
+    async fn process(&mut self, event: Event) -> ProcessResult {
+        if !config::periph_as_scroll() {
+            return ProcessResult::Continue(event);
+        }
+        match event {
+            Event::Joystick(mut axes) => {
+                for ev in axes.iter_mut() {
+                    match ev.axis {
+                        Axis::X => ev.axis = Axis::H,
+                        Axis::Y => {
+                            // Right half is mounted mirrored (see PointerProcessor
+                            // Y negation). Flip so finger-up → scroll up under the
+                            // same ScrollProcessor V convention the left ball uses.
+                            ev.axis = Axis::V;
+                            ev.value = -ev.value;
+                        }
+                        _ => {}
+                    }
+                }
+                ProcessResult::Continue(Event::Joystick(axes))
+            }
+            other => ProcessResult::Continue(other),
+        }
+    }
+
+    fn get_keymap(&self) -> &RefCell<KeyMap<'a, ROW, COL, NUM_LAYER, NUM_ENCODER>> {
+        self.keymap
     }
 }
 

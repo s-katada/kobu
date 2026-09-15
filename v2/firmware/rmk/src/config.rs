@@ -32,7 +32,7 @@ use rmk::input_device::battery::{
     KOBU_MOUSE_BUTTONS, KOBU_PERIPHERAL_SAMPLES, KOBU_PTR_ARRIVALS, KOBU_PTR_DEFERRALS,
     KOBU_PTR_EMITS, KOBU_SCROLL_INVERT_X, KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_STEP,
     KOBU_SCROLL_THROTTLE_MS, KOBU_STATUS_LED_BAT_HIGH, KOBU_STATUS_LED_BAT_LOW,
-    KOBU_STATUS_LED_PURPLE_HOLD_MS, KOBU_TRACKBALL_CPI,
+    KOBU_STATUS_LED_PURPLE_HOLD_MS, KOBU_TRACKBALL_CPI, KOBU_PERIPH_AS_SCROLL,
 };
 
 /// Ordering used for all reads / writes here. `Relaxed` is correct
@@ -191,6 +191,12 @@ pub fn scroll_invert_y() -> bool {
 /// sample. Guarded ≥ 1 here so a rogue write can never zero the divisor.
 pub fn scroll_step() -> i32 {
     KOBU_SCROLL_STEP.load(ORD).max(1) as i32
+}
+
+/// True while the H+J combo (User15) is held — peripheral trackball scrolls
+/// instead of moving the pointer. See `trackball.rs::PeriphScrollRelabel`.
+pub fn periph_as_scroll() -> bool {
+    KOBU_PERIPH_AS_SCROLL.load(ORD)
 }
 
 // Retained for the kobu-config wire schema (Via Custom Channel 0xC0 id 0x05 /

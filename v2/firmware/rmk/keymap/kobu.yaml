@@ -87,3 +87,5 @@ combos:
   - {p: [16, 17], k: {t: '[', s: '{'}, l: [Mac, Win, Linux]}
   - {p: [17, 18], k: {t: ']', s: '}'}, l: [Mac, Win, Linux]}
   - {p: [11, 12], k: {t: Neovim, s: tog 6}, l: [Win, Neovim]}
+  # H+J hold → right trackball scrolls (firmware User15 / KOBU_PERIPH_AS_SCROLL)
+  - {p: [15, 16], k: {t: Scroll, type: held}, l: [Mac, Win, Linux]}

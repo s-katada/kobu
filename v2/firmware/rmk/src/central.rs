@@ -13,7 +13,8 @@ mod keyboard_central {
     use crate::battery_source::{CentralBatteryTagger, KobuBatterySourceTap};
     use crate::status_led::StatusLedController;
     use crate::trackball::{
-        AxisRelabel, PointerProcessor, ScrollProcessor, run_auto_mouse_layer, run_input_gate_central,
+        AxisRelabel, PeriphScrollRelabel, PointerProcessor, ScrollProcessor, run_auto_mouse_layer,
+        run_input_gate_central,
     };
 
     // Status LED controller declared via the `rmk_macro` controller
@@ -42,8 +43,9 @@ mod keyboard_central {
 
     // Override the macro-generated entry so we can:
     //   1. wrap the central-local PMW3610 with `AxisRelabel` (X→H, Y→V),
-    //   2. run `[ScrollProcessor, PointerProcessor, battery_processor]` as
-    //      the processor chain, and
+    //   2. run `[PeriphScrollRelabel, ScrollProcessor, PointerProcessor,
+    //      battery_processor]` as the processor chain (PeriphScrollRelabel
+    //      remaps the right ball to scroll while H+J is held), and
     //   3. spawn `battery_color_led` alongside everything else.
     //
     // Variable bindings still in scope from the macro at this point:
@@ -66,6 +68,7 @@ mod keyboard_central {
         let _ = right_processor;
 
         let mut left_relabeled = AxisRelabel::new(left_device);
+        let mut periph_scroll_relabel = PeriphScrollRelabel::new(&keymap);
         let mut scroll_processor = ScrollProcessor::new(&keymap);
         let mut pointer_processor = PointerProcessor::new(&keymap);
 
@@ -105,7 +108,7 @@ mod keyboard_central {
                             ::rmk::run_rmk(&keymap, driver, &stack, &mut storage, rmk_config),
                         ),
                         ::rmk::run_processor_chain!(
-                            ::rmk::channel::EVENT_CHANNEL => [battery_source_tap, scroll_processor, pointer_processor, battery_processor],
+                            ::rmk::channel::EVENT_CHANNEL => [battery_source_tap, periph_scroll_relabel, scroll_processor, pointer_processor, battery_processor],
                         ),
                     ),
                     ::rmk::split::central::run_peripheral_manager::<4, 5, 0, 5, _>(

@@ -303,6 +303,14 @@ combos = [
     # ってる」 and was reverted, and the S+D Neovim-toggle duplicate was
     # dropped (the Mac layer has no S+D combo).
     { actions = ["D", "F"], output = "WM(No, LGui|LAlt)", layer = 7 },   # combo_cmd_alt (pos 12,13, Linux = Mac behavior)
+    # H+J hold → right (peripheral) trackball as scroll (2026-09-15). Emits
+    # User15 for the hold duration; build.rs::patch_rmk_periph_scroll_hold_user15
+    # latches KOBU_PERIPH_AS_SCROLL so PeriphScrollRelabel routes the right
+    # ball through ScrollProcessor. Release restores pointer mode. Linux
+    # resolves H as TD(3) (Ctrl+H fork token), so that layer needs its own
+    # action spelling — same pattern as the D+F / quote combos.
+    { actions = ["H", "J"], output = "User15" },                         # combo_periph_scroll (pos 15,16)
+    { actions = ["TD(3)", "J"], output = "User15", layer = 7 },           # combo_periph_scroll (Linux H=TD(3))
 ]
 
 # Fork — one entry (2026-08-26): Ctrl+H → Backspace, LINUX LAYER ONLY
@@ -646,7 +654,7 @@ cs = "P0_09"
 [rmk]
 split_peripherals_num = 1
 ble_profiles_num = 4
-combo_max_num = 18
+combo_max_num = 20
 morse_max_num = 6
 macro_space_size = 256
 fork_max_num = 8

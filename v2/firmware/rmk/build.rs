@@ -362,6 +362,14 @@ fn main() {
     // Anchors on patch_rmk_set_host_connected's text, so it must run after.
     patch_rmk_publish_connected_on_bonded_reconnect();
 
+    // H+J hold → peripheral (right) trackball as scroll (2026-09-15). Combo
+    // emits User15 while held; process_user latches KOBU_PERIPH_AS_SCROLL;
+    // PeriphScrollRelabel (src/trackball.rs) rewrites X/Y → H/V so
+    // ScrollProcessor claims the right ball until release. NEW registry
+    // patches ⇒ one `cargo clean --release -p rmk` before the next build.
+    patch_rmk_periph_scroll_hold_atomic();
+    patch_rmk_periph_scroll_hold_user15();
+
     generate_vial_config();
 
     let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
@@ -8716,6 +8724,100 @@ fn patch_rmk_publish_connected_on_bonded_reconnect() {
         );
     }
     contents = contents.replace(FROM, TO);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Inject `KOBU_PERIPH_AS_SCROLL` — latched while the H+J (User15) combo is
+/// held so the central can route the peripheral trackball through
+/// ScrollProcessor instead of PointerProcessor. See
+/// `src/trackball.rs::PeriphScrollRelabel`.
+fn patch_rmk_periph_scroll_hold_atomic() {
+    const MARKER: &str = "// kobu: KOBU_PERIPH_AS_SCROLL atomic applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/input_device/battery.rs") else {
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let anchor =
+        "pub static KOBU_SCROLL_STEP: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(30);";
+    if !contents.contains(anchor) {
+        panic!(
+            "kobu: expected KOBU_SCROLL_STEP anchor in rmk-{RMK_VERSION} input_device/battery.rs at {}; \
+             patch_rmk_kobu_settings_atomics must run first — check order in build.rs::main",
+            path.display()
+        );
+    }
+    let injected = format!(
+        "{anchor}\n\n// kobu: true while the H+J combo (User15) is held. Read by\n// firmware/src/trackball.rs::PeriphScrollRelabel to rewrite peripheral\n// Joystick X/Y → H/V so ScrollProcessor claims the right ball as scroll;\n// cleared on combo release → PointerProcessor resumes as usual.\npub static KOBU_PERIPH_AS_SCROLL: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);"
+    );
+    contents = contents.replace(anchor, &injected);
+
+    contents.push('\n');
+    contents.push_str(MARKER);
+    contents.push('\n');
+    fs::write(&path, contents).unwrap_or_else(|e| {
+        panic!("kobu: failed to write {}: {e}", path.display());
+    });
+}
+
+/// Latch `KOBU_PERIPH_AS_SCROLL` from User15 press/release (the H+J combo
+/// output). User15 is otherwise unused (profile ids stop at User11 /
+/// ToggleConnection); early-return so it never falls into BLE profile arms.
+fn patch_rmk_periph_scroll_hold_user15() {
+    const MARKER: &str = "// kobu: User15 → KOBU_PERIPH_AS_SCROLL hold applied";
+    const RMK_VERSION: &str = "0.8.2";
+
+    let Some(path) = find_rmk_file(RMK_VERSION, "src/keyboard.rs") else {
+        return;
+    };
+    println!("cargo:rerun-if-changed={}", path.display());
+
+    let mut contents = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!("kobu: failed to read {}: {e}", path.display());
+    });
+    if contents.contains(MARKER) {
+        return;
+    }
+
+    let from = r#"            // Get user key id
+            let id = (key as u16 - KeyCode::User0 as u16) as u8;
+            if event.pressed {"#;
+    let to = r#"            // Get user key id
+            let id = (key as u16 - KeyCode::User0 as u16) as u8;
+            // kobu: User15 = H+J hold → peripheral trackball as scroll.
+            // Latched for the whole combo hold; release clears it so the
+            // right ball returns to pointer mode. See
+            // firmware/src/trackball.rs::PeriphScrollRelabel.
+            if id == 15 {
+                crate::input_device::battery::KOBU_PERIPH_AS_SCROLL
+                    .store(event.pressed, core::sync::atomic::Ordering::Relaxed);
+                return;
+            }
+            if event.pressed {"#;
+
+    if !contents.contains(from) {
+        panic!(
+            "kobu: expected rmk-{RMK_VERSION} keyboard.rs process_user id block missing in {}; \
+             upstream may have changed — update firmware/build.rs::patch_rmk_periph_scroll_hold_user15",
+            path.display()
+        );
+    }
+    contents = contents.replace(from, to);
 
     contents.push('\n');
     contents.push_str(MARKER);

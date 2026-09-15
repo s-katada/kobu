@@ -45,7 +45,8 @@ mod keyboard_central {
     use crate::dongle_battery::DongleBatteryRouter;
     use crate::status_led::StatusLedController;
     use crate::trackball::{
-        PointerProcessor, ScrollProcessor, run_auto_mouse_layer, run_input_gate_central,
+        PeriphScrollRelabel, PointerProcessor, ScrollProcessor, run_auto_mouse_layer,
+        run_input_gate_central,
     };
 
     // Onboard RGB LED (P0.26/P0.30/P0.06) as a bring-up diagnostic. Claimed
@@ -63,8 +64,9 @@ mod keyboard_central {
     //   1. drop the dongle's own input devices (0x0 matrix, floating-pin ADC,
     //      and the two placeholder Pmw3610Processors the macro emits for the
     //      peripherals' trackballs),
-    //   2. run [DongleBatteryRouter, Scroll, Pointer, battery_processor] as
-    //      the chain,
+    //   2. run [DongleBatteryRouter, PeriphScrollRelabel, Scroll, Pointer,
+    //      battery_processor] as the chain (PeriphScrollRelabel remaps the
+    //      right ball to scroll while H+J is held),
     //   3. run TWO peripheral managers (id 0 = right at col offset 5, id 1 =
     //      left at col offset 0 — must match the [[split.peripheral]] order),
     //   4. join the Prospector display task on the pins the Prospector
@@ -85,6 +87,7 @@ mod keyboard_central {
         let _ = matrix;
 
         let mut battery_router = DongleBatteryRouter::new(&keymap);
+        let mut periph_scroll_relabel = PeriphScrollRelabel::new(&keymap);
         let mut scroll_processor = ScrollProcessor::new(&keymap);
         let mut pointer_processor = PointerProcessor::new(&keymap);
 
@@ -106,7 +109,7 @@ mod keyboard_central {
                     ),
                     ::rmk::embassy_futures::join::join(
                         ::rmk::run_processor_chain!(
-                            ::rmk::channel::EVENT_CHANNEL => [battery_router, scroll_processor, pointer_processor, battery_processor],
+                            ::rmk::channel::EVENT_CHANNEL => [battery_router, periph_scroll_relabel, scroll_processor, pointer_processor, battery_processor],
                         ),
                         // One manager per half. Generics are <ROW, COL,
                         // ROW_OFFSET, COL_OFFSET>; ids index peripheral_addrs

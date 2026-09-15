@@ -119,6 +119,8 @@ combos = [
     { actions = ["D", "F"], output = "WM(No, LCtrl|LAlt)", layer = 1 },
     { actions = ["S", "D"], output = "TG(6)", layer = 1 },
     { actions = ["S", "D"], output = "TG(6)", layer = 6 },
+    # H+J hold → right trackball as scroll (kept in sync with ../rmk/keyboard.toml).
+    { actions = ["H", "J"], output = "User15" },
 ]
 
 [behavior.fork]
@@ -261,7 +263,7 @@ cs = "P0_09"
 # macro/build pipeline.
 split_peripherals_num = 2
 ble_profiles_num = 4
-combo_max_num = 18
+combo_max_num = 20
 morse_max_num = 6
 macro_space_size = 256
 fork_max_num = 8
