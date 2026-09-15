@@ -1,0 +1,59 @@
+# baseline BEFORE the travel-conserving forward fix
+# captured 2026-09-08 17:17 JST onward on the users Mac, kobu2 over BLE, flashed FW = 2026-08-28 build
+
+capture: 41.0 min, 36594 reports, 33850 pointer-motion, 1349 wheel/pan, 704 button events
+delivery interval (intra-burst) top bins: 15.00ms:15142, 16.25ms:4895, 28.75ms:2419, 13.75ms:1692, 30.00ms:1692, 1.25ms:714
+
+FAST MOTION (prev >= 8 counts): n=8055, P(no report at a connection event) = 0.149
+  gap distribution (events): 1:0.851, 2:0.111, 3:0.026, 4:0.006, 5:0.003, 6:0.001
+CONSERVATION (steady fast motion, both >= 12): ratio mag(after)/mag(before)
+  gap=1 events: n=2687 mean ratio=1.06  (carried travel => ~1; lost => ~1)
+  gap=2 events: n= 320 mean ratio=1.06  (carried travel => ~2; lost => ~1)
+  gap=3 events: n=  83 mean ratio=1.05  (carried travel => ~3; lost => ~1)
+  gap=4 events: n=  17 mean ratio=1.18  (carried travel => ~4; lost => ~1)
+
+LOSS vs SPEED (|dx|+|dy| of preceding report):
+    8-11   n= 3474 loss=0.162
+   12-19   n= 3235 loss=0.140
+   20-39   n= 1271 loss=0.138
+   40-9999 n=   75 loss=0.093
+
+TIMELINE (fast-motion loss per 60s window; windows with >= 40 intervals)
+       0s n= 176 loss=0.142 ##############
+      60s n= 332 loss=0.181 ##################
+     120s n= 223 loss=0.143 ##############
+     180s n=  84 loss=0.131 #############
+     360s n= 161 loss=0.124 ############
+     420s n= 272 loss=0.129 ############
+     480s n= 216 loss=0.167 ################
+     540s n= 255 loss=0.078 #######
+     600s n= 284 loss=0.085 ########
+     660s n= 208 loss=0.087 ########
+     780s n= 172 loss=0.238 #######################
+     840s n=  74 loss=0.311 ###############################
+     900s n= 234 loss=0.124 ############
+     960s n= 344 loss=0.116 ###########
+    1020s n= 154 loss=0.338 #################################
+    1080s n=  54 loss=0.204 ####################
+    1140s n= 316 loss=0.222 ######################
+    1200s n=  77 loss=0.364 ####################################
+    1380s n= 260 loss=0.127 ############
+    1440s n= 225 loss=0.071 #######
+    1560s n= 101 loss=0.030 ##
+    1620s n=  91 loss=0.077 #######
+    1680s n= 136 loss=0.103 ##########
+    1740s n= 228 loss=0.061 ######
+    1800s n= 178 loss=0.112 ###########
+    1860s n= 361 loss=0.091 #########
+    1920s n=  88 loss=0.057 #####
+    1980s n= 407 loss=0.071 #######
+    2040s n= 317 loss=0.098 #########
+    2100s n= 236 loss=0.225 ######################
+    2160s n= 195 loss=0.144 ##############
+    2220s n= 350 loss=0.300 ##############################
+    2280s n= 454 loss=0.205 ####################
+    2340s n= 442 loss=0.156 ###############
+    2400s n= 262 loss=0.233 #######################
+  windows=35 min=0.030 max=0.364 mean=0.153  first-half mean=0.166 second-half mean=0.140
+
+WHEEL/PAN (left ball) intra-burst interval top bins: 15.00ms:191, 30.00ms:111, 16.25ms:87, 45.00ms:79, 28.75ms:74, 60.00ms:56

@@ -27,11 +27,12 @@ use core::sync::atomic::Ordering;
 use embassy_nrf::pac;
 use embassy_time::Duration;
 use rmk::input_device::battery::{
-    KOBU_BALL_FF_REJECTS, KOBU_BALL_INIT_READY, KOBU_HOST_CONN_INTERVAL_US, KOBU_HOST_CONNECTED,
-    KOBU_LAST_KEY_TICKS, KOBU_LAST_TYPING_TICKS, KOBU_MOUSE_BUTTONS, KOBU_PERIPHERAL_SAMPLES,
-    KOBU_SCROLL_INVERT_X, KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_STEP, KOBU_SCROLL_THROTTLE_MS,
-    KOBU_STATUS_LED_BAT_HIGH, KOBU_STATUS_LED_BAT_LOW, KOBU_STATUS_LED_PURPLE_HOLD_MS,
-    KOBU_TRACKBALL_CPI,
+    KOBU_BALL_FF_REJECTS, KOBU_BALL_INIT_READY, KOBU_HID_DROP_DX, KOBU_HID_DROP_DY,
+    KOBU_HOST_CONNECTED, KOBU_HOST_CONN_INTERVAL_US, KOBU_LAST_KEY_TICKS, KOBU_LAST_TYPING_TICKS,
+    KOBU_MOUSE_BUTTONS, KOBU_PERIPHERAL_SAMPLES, KOBU_PTR_ARRIVALS, KOBU_PTR_DEFERRALS,
+    KOBU_PTR_EMITS, KOBU_SCROLL_INVERT_X, KOBU_SCROLL_INVERT_Y, KOBU_SCROLL_STEP,
+    KOBU_SCROLL_THROTTLE_MS, KOBU_STATUS_LED_BAT_HIGH, KOBU_STATUS_LED_BAT_LOW,
+    KOBU_STATUS_LED_PURPLE_HOLD_MS, KOBU_TRACKBALL_CPI,
 };
 
 /// Ordering used for all reads / writes here. `Relaxed` is correct
@@ -320,4 +321,43 @@ pub fn take_ball_motion_samples() -> u32 {
 #[allow(dead_code)]
 pub fn take_scroll_emits() -> u32 {
     crate::trackball::SCROLL_EMITS.swap(0, ORD)
+}
+
+// ─── Loss ledger (2026-09-08, always on) ─────────────────────────────
+//
+// The pointer path is: right-half PMW3610 -> split link -> ARRIVALS at the
+// central -> PointerProcessor (EMITS on a successful try_send, DEFERRALS when
+// the shared report channel is busy and travel stays banked in pend_*) -> BLE
+// HID writer -> Mac. A host-side capture on 2026-09-08 showed the Mac missing
+// ~15% of connection events during fast motion; these counters, exposed over
+// Via 0xC0 ids 0x20-0x28 (build.rs::patch_rmk_via_custom_get_loss_ledger),
+// say which stage the samples stop at. All are cheap Relaxed atomics.
+
+/// Count a pointer sample that reached the central (post-AxisRelabel match).
+pub fn note_ptr_arrival() {
+    KOBU_PTR_ARRIVALS.fetch_add(1, ORD);
+}
+
+/// Count a pointer report that was accepted by the shared report channel.
+pub fn note_ptr_emit() {
+    KOBU_PTR_EMITS.fetch_add(1, ORD);
+}
+
+/// Count a pointer report deferred because the channel was busy. Travel stays
+/// banked in `pend_*`, so this is lossless coalescing, not loss — but a high
+/// rate means the host link, not the sensor, is setting the cursor's cadence.
+pub fn note_ptr_deferral() {
+    KOBU_PTR_DEFERRALS.fetch_add(1, ORD);
+}
+
+/// Read-and-clear the travel (HID counts) that the BLE HID writer had to drop
+/// when its 40 ms notify bound expired (see
+/// `build.rs::patch_rmk_hid_writer_drop_carry`). `PointerProcessor` folds this
+/// back into `pend_*`, so the cursor still lands where the ball went. Clamped
+/// so a pathological backlog can never fling the cursor across the screen.
+pub fn take_hid_drop_travel() -> (i32, i32) {
+    const MAX_CARRY: i32 = 500;
+    let x = KOBU_HID_DROP_DX.swap(0, ORD).clamp(-MAX_CARRY, MAX_CARRY);
+    let y = KOBU_HID_DROP_DY.swap(0, ORD).clamp(-MAX_CARRY, MAX_CARRY);
+    (x, y)
 }

@@ -1085,6 +1085,19 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                 if cfg!(feature = "led-conn-diag") {
                     config::note_pointer_sample();
                 }
+                // Loss ledger (2026-09-08, always on): count every sample that
+                // reaches the central, and fold back any travel the BLE HID
+                // writer had to drop on its 40 ms notify bound. That travel was
+                // already deducted from pend_* when the report was handed over,
+                // so before this it vanished silently — the measured
+                // under-travel behind the もっさり. See config::take_hid_drop_travel
+                // and build.rs::patch_rmk_hid_writer_drop_carry.
+                config::note_ptr_arrival();
+                let (drop_x, drop_y) = config::take_hid_drop_travel();
+                if drop_x != 0 || drop_y != 0 {
+                    self.pend_x = self.pend_x.saturating_add(drop_x.saturating_mul(CPI_DENOM));
+                    self.pend_y = self.pend_y.saturating_add(drop_y.saturating_mul(CPI_DENOM));
+                }
                 // Click-shake guard: detect a mouse-button PRESS rising edge and
                 // start a brief motion-freeze, so the incidental ball roll while
                 // pressing a layer-4 MouseBtn doesn't jump the cursor (misclick).
@@ -1191,6 +1204,12 @@ impl<'a, const ROW: usize, const COL: usize, const NUM_LAYER: usize, const NUM_E
                         // channel leaves pend_* to coalesce on the next event.
                         self.pend_x -= dx * CPI_DENOM;
                         self.pend_y -= dy * CPI_DENOM;
+                        config::note_ptr_emit();
+                    } else {
+                        // Deferred, not lost: pend_* keeps the travel. Counted so
+                        // the Via ledger can show the host link (not the sensor)
+                        // setting the cadence during fast motion.
+                        config::note_ptr_deferral();
                     }
                 }
                 // Wake the status-LED controller so it can flash purple for the
