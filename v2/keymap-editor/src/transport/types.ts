@@ -14,6 +14,9 @@ export const KOBU_PRODUCT_ID = 0x4259;
 /** USB product id of kobu v2 = "kobu2" (`v2/firmware/rmk/keyboard.toml`). */
 export const KOBU2_PRODUCT_ID = 0x425a;
 
+/** USB product id of kobu v2 set 2 = "kobu2 squid" (`--features set-2`). */
+export const KOBU2_SET2_PRODUCT_ID = 0x425b;
+
 /**
  * Product ids this editor will talk to.
  *
@@ -22,10 +25,16 @@ export const KOBU2_PRODUCT_ID = 0x425a;
  * would edit real matrix slots against the wrong picture. v1 has its own
  * editor under `v1/web/rmk-editor`; the connect screen links to it.
  *
+ * Includes set 2 (`kobu2 squid`, PID 0x425B) — same geometry, different
+ * split-adv token / Mac-facing identity so two physical sets can coexist.
+ *
  * Both the WebHID picker filter and the reconnect predicate iterate this
  * list, so a future generation only needs its PID appended.
  */
-export const EDITOR_PRODUCT_IDS: readonly number[] = [KOBU2_PRODUCT_ID];
+export const EDITOR_PRODUCT_IDS: readonly number[] = [
+  KOBU2_PRODUCT_ID,
+  KOBU2_SET2_PRODUCT_ID,
+];
 
 /**
  * Raw HID usage page for Vial's vendor-defined report. Matches

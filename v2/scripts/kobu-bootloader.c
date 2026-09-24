@@ -32,7 +32,8 @@
 #include <string.h>
 
 #define KOBU_VID            0x4b4f
-#define KOBU_PID            0x425a
+#define KOBU_PID            0x425a   /* classic set 1 (kobu2 octopus) */
+#define KOBU_PID_SET2       0x425b   /* classic set 2 (kobu2 squid)  */
 #define VIAL_USAGE_PAGE     0xff60
 #define VIAL_USAGE          0x61
 #define VIA_BOOTLOADER_JUMP 0x0b
@@ -77,6 +78,10 @@ static void get_str(IOHIDDeviceRef d, CFStringRef key, char *buf, size_t n) {
 // macOS spells it "USB" / "Bluetooth Low Energy"; match loosely.
 static int transport_is_usb(const char *t) { return strcasestr(t, "usb") != NULL; }
 static int transport_is_ble(const char *t) { return strcasestr(t, "bluetooth") != NULL; }
+
+static int pid_is_kobu2(long pid) {
+    return pid == KOBU_PID || pid == KOBU_PID_SET2;
+}
 
 // ─── Via request/response over raw HID ────────────────────────────────────
 // Replies arrive as INPUT reports, so we need a callback + a run loop.
@@ -337,23 +342,22 @@ int main(int argc, char **argv) {
     IOHIDManagerRef mgr = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
     if (!mgr) { fprintf(stderr, "kobu-bootloader: IOHIDManagerCreate failed\n"); return 1; }
 
-    // Match on VID/PID only; the usage-page filter happens below so --list can
-    // show every interface the keyboard exposes.
+    // Match on VID only; accept both classic set PIDs (0x425A kobu2 octopus
+    // / 0x425B kobu2 squid) below. Usage-page filter happens below too so --list
+    // can show every interface the keyboard exposes.
     CFMutableDictionaryRef match = CFDictionaryCreateMutable(
         kCFAllocatorDefault, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    int vid = KOBU_VID, pid = KOBU_PID;
+    int vid = KOBU_VID;
     CFNumberRef vidn = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &vid);
-    CFNumberRef pidn = CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &pid);
     CFDictionarySetValue(match, CFSTR(kIOHIDVendorIDKey), vidn);
-    CFDictionarySetValue(match, CFSTR(kIOHIDProductIDKey), pidn);
     IOHIDManagerSetDeviceMatching(mgr, match);
 
     IOHIDManagerOpen(mgr, kIOHIDOptionsTypeNone);
     CFSetRef devs = IOHIDManagerCopyDevices(mgr);
     if (!devs || CFSetGetCount(devs) == 0) {
-        fprintf(stderr, "kobu-bootloader: no kobu2 (%04x:%04x) HID device found.\n"
+        fprintf(stderr, "kobu-bootloader: no kobu2 (%04x:%04x / %04x) HID device found.\n"
                         "  Is the LEFT half plugged in with a DATA-capable USB cable?\n",
-                KOBU_VID, KOBU_PID);
+                KOBU_VID, KOBU_PID, KOBU_PID_SET2);
         return 1;
     }
 
@@ -363,9 +367,13 @@ int main(int argc, char **argv) {
 
     IOHIDDeviceRef target = NULL;
     int vial_seen = 0;
+    int kobu_seen = 0;
 
     for (CFIndex i = 0; i < n; i++) {
         IOHIDDeviceRef d = list[i];
+        long pid = get_long(d, CFSTR(kIOHIDProductIDKey));
+        if (!pid_is_kobu2(pid)) continue;
+        kobu_seen = 1;
         long up = get_long(d, CFSTR(kIOHIDPrimaryUsagePageKey));
         long us = get_long(d, CFSTR(kIOHIDPrimaryUsageKey));
         char transport[64], serial[128], product[128];
@@ -377,8 +385,8 @@ int main(int argc, char **argv) {
         if (is_vial) vial_seen = 1;
 
         if (do_list) {
-            printf("%-8s usage=%#06lx:%#04lx %-24s %s%s\n",
-                   transport[0] ? transport : "?", up, us, serial, product,
+            printf("%-8s pid=%04lx usage=%#06lx:%#04lx %-24s %s%s\n",
+                   transport[0] ? transport : "?", pid, up, us, serial, product,
                    is_vial ? "   <- Vial raw HID" : "");
             continue;
         }
@@ -393,7 +401,14 @@ int main(int argc, char **argv) {
         break;
     }
 
-    if (do_list) return 0;
+    if (do_list) return kobu_seen ? 0 : 1;
+
+    if (!kobu_seen) {
+        fprintf(stderr, "kobu-bootloader: no kobu2 (%04x:%04x / %04x) HID device found.\n"
+                        "  Is the LEFT half plugged in with a DATA-capable USB cable?\n",
+                KOBU_VID, KOBU_PID, KOBU_PID_SET2);
+        return 1;
+    }
 
     if (!target) {
         if (vial_seen)

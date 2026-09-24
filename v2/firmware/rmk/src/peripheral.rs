@@ -2,6 +2,7 @@
 #![no_std]
 
 mod peripheral_led;
+mod set_token;
 
 use rmk::macros::rmk_peripheral;
 
@@ -21,9 +22,15 @@ mod keyboard_peripheral {
     // P0_26 / P0_30 / P0_06 are claimed from `p` here. They are NOT declared as
     // static `[[split.peripheral.output]]` pins in keyboard.toml (the static
     // P0_30 green output was removed), so they are still owned by `p`.
+    //
+    // Controller initializers run before the split machinery starts, so this
+    // block doubles as our earliest boot hook for the set-token stamp.
     #[controller(poll)]
     fn peripheral_led() {
         use ::embassy_nrf::gpio::{Level, Output, OutputDrive};
+        // Multi-set independence: advertise THIS set's token so only our own
+        // central scan-binds this half (see src/set_token.rs).
+        crate::set_token::apply_split_set_token();
         let red = Output::new(p.P0_26, Level::High, OutputDrive::Standard);
         let green = Output::new(p.P0_30, Level::High, OutputDrive::Standard);
         let blue = Output::new(p.P0_06, Level::High, OutputDrive::Standard);

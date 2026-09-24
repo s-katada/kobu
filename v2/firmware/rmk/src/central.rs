@@ -3,6 +3,7 @@
 
 mod battery_source;
 mod config;
+mod set_token;
 mod status_led;
 mod trackball;
 
@@ -66,6 +67,13 @@ mod keyboard_central {
         // Discard the macro-generated default Pmw3610Processor bindings.
         let _ = left_processor;
         let _ = right_processor;
+
+        // Multi-set independence: stamp THIS set's split-adv token before
+        // scan/advertise starts, and override the Mac-facing BLE/USB name+PID
+        // so two sets show up as `kobu2 octopus` vs `kobu2 squid` (set_token.rs).
+        crate::set_token::apply_split_set_token();
+        let mut rmk_config = rmk_config;
+        crate::set_token::apply_host_identity(&mut rmk_config);
 
         let mut left_relabeled = AxisRelabel::new(left_device);
         let mut periph_scroll_relabel = PeriphScrollRelabel::new(&keymap);

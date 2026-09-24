@@ -5,7 +5,7 @@ kobu2（v2）のキーマップとトラックボール設定を、ブラウザ�
 変更できます。
 
 - 公開先: `https://kobu-editor.digletts.dev/v2/`（v1 と同じ Worker の `/v2` 配下）
-- 対象: **kobu2 のみ**（USB PID `0x425A`）。初代 kobu はキー配列が違うので
+- 対象: **kobu2 のみ**（USB PID `0x425A` / set 2 の `0x425B`）。初代 kobu はキー配列が違うので
   [`../../v1/web/rmk-editor`](../../v1/web/rmk-editor) を使ってください。
 - 必要環境: WebHID が使えるデスクトップブラウザ（Chrome / Edge など Chromium 系）
 

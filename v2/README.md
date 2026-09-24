@@ -35,9 +35,9 @@ nix develop ../../../..#firmware --command keymap draw kobu.yaml \
 - 追加キーは各半分の空いていたマトリクス交点 **ROW3×COL4**（小指列ネット × 親指行ネット）に配線。GPIO 追加なし・マトリクス寸法 (4×10) 変更なしで、keymap 座標では v1 で phantom だった **(3,0) / (3,9)** に載ります。レイヤー 0 の割り当ては左=Mission Control（Consumer 0x29F、Apple キーボードの F3 と同じ usage。2026-08-29 に LShift から変更）/ 右=RShift（他レイヤーは透過）。
   - 実基板で確認済み: 4 基板とも J1 は `1..4=/ROW0../ROW3`, `5..9=/COL0../COL4`, `10=NC` の**同一ピン配置**で、追加キーは各メイン基板の `SW16 = /ROW3 × /COL4`（小指列の最下段、既存最下行の 16mm 下）。/ROW3 が FFC pin4 でメインユニットへ届いています。
   - ⚠️ FFC ケーブルは v1 と逆で**ストレート結線（pin N ↔ pin N）**が必要です。v2 の FFC には電源線が無く（pin10 = NC、メイン基板はスイッチとダイオードのみの完全パッシブ）、誤ったケーブルでも MCU ピンが電源に張り付くことはありませんが、マトリクスは全く読めません。導通チェック手順は `firmware/rmk/keyboard.toml` 冒頭コメント参照。
-- 識別子: name/product_name = **kobu2**、product_id = **0x425A**（VID `0x4b4f` と Vial keyboard UID は v1 と共通）。[web editor](../v1/web/rmk-editor/) は v1/v2 両方の PID を受け付けます。
-- それ以外（build.rs の 84 レジストリパッチ、`src/`、メモリレイアウト、依存クレートのバージョン）は v1 と同一です。
-  - うち 3 つは [`firmware/dongle/`](firmware/dongle/) のための 2026-08 追加: `patch_rmk_peripheral_manager_source_disambiguation`（**id≠0 のときだけ発火** → ペリフェラルが id0 の右手のみのクラシック構成では実行時に不活性）、`patch_rmk_split_connect_timeout_widen`（split 接続タイムアウト 5s→12s。クラシック構成では SCANNING_MUTEX が無競合でタイムアウト自体ほぼ発火しないため実質不可視）、`patch_rmk_split_adv_set_token`（広告のセット識別トークン。デフォルト 0 = 素の rmk 挙動なのでクラシック構成は電波レベルで不変、複数セットの誤ペアリング防止はドングル構成のみ有効化）。
+- 識別子: name/product_name = **kobu2**、product_id = **0x425A**（VID `0x4b4f` と Vial keyboard UID は v1 と共通）。[web editor](../v1/web/rmk-editor/) は v1/v2 両方の PID を受け付けます。2 台目セットは `--features set-2` で **kobu2 squid / 0x425B**（後述）。
+- それ以外（build.rs のレジストリパッチ、`src/`、メモリレイアウト、依存クレートのバージョン）は v1 と同一です。
+  - うち 3 つは [`firmware/dongle/`](firmware/dongle/) のための 2026-08 追加: `patch_rmk_peripheral_manager_source_disambiguation`（**id≠0 のときだけ発火** → ペリフェラルが id0 の右手のみのクラシック構成では実行時に不活性）、`patch_rmk_split_connect_timeout_widen`（split 接続タイムアウト 5s→12s。クラシック構成では SCANNING_MUTEX が無競合でタイムアウト自体ほぼ発火しないため実質不可視）、`patch_rmk_split_adv_set_token`（広告のセット識別トークン。クラシック構成は `src/set_token.rs` で set 1=`0x41` / set 2=`0x42` を起動時に載せ、2 台同時通電でも左右が誤ペアしない。ドングルの `0x4B` とは別レンジ）。
 
 ## ⚠️ build.rs は v1 と同一内容に保つ
 
@@ -65,6 +65,20 @@ UF2 は CI が [firmware-latest リリース](../../releases/tag/firmware-latest
 kobu-uf2conv target/thumbv7em-none-eabihf/release/central    kobu2-rmk-central.uf2
 kobu-uf2conv target/thumbv7em-none-eabihf/release/peripheral kobu2-rmk-peripheral.uf2
 ```
+
+## 2 台の kobu2 を同時に使う（セット識別）
+
+クラシック構成はデフォルトで **set 1**（split 広告トークン `0x41`、Mac 上の名前 `kobu2 octopus`、PID `0x425A`）です。2 台目は **同じ左右ペアごと**に `--features set-2` でビルドした UF2 を焼きます（トークン `0x42`、名前 `kobu2 squid`、PID `0x425B`）。トークンが違うと左右の初回ペアリングが相手セットに掴まれません。Mac 上も別名になるのでプロファイルを取り違えにくくなります。
+
+```sh
+# 2 台目セット（左右とも同じ feature）
+cargo build --release --features set-2 --bin central
+cargo build --release --features set-2 --bin peripheral
+kobu-uf2conv target/thumbv7em-none-eabihf/release/central    kobu2-rmk-central-set2.uf2
+kobu-uf2conv target/thumbv7em-none-eabihf/release/peripheral kobu2-rmk-peripheral-set2.uf2
+```
+
+**初回だけ** 各半分を `clear_storage=true` ビルド（または nuke）でボンドを消してから通常 UF2 を焼き、**1 セットずつ電源を入れて**左右を組み直してください。トークン付き広告は旧ファーム（token 0）とも相互に不可視なので、片側だけ古い UF2 のままだと繋がりません。
 
 ## XIAO の完全消去（flash nuke）
 

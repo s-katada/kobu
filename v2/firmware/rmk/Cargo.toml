@@ -102,6 +102,12 @@ led-conn-diag = []
 # `if cfg!(feature = "led-ball-diag")`-gated so the normal binary is
 # byte-for-byte unaffected.
 led-ball-diag = []
+# Second physical kobu2 set: different split-adv token (0x42) + Mac-facing
+# name `kobu2 squid` / PID 0x425B so two sets can run side-by-side without
+# cross-pairing. Default (no feature) is set 1 (token 0x41, `kobu2 octopus`).
+# Flash BOTH halves of the second set with `--features set-2`, then once with
+# clear_storage so they re-pair under the new token. See src/set_token.rs.
+set-2 = []
 
 [[bin]]
 name = "central"

@@ -16,7 +16,7 @@
  */
 
 import { XzReadableStream } from 'xz-decompress';
-import { KOBU2_PRODUCT_ID, TransportError, VIAL_PACKET_SIZE } from '../transport/types';
+import { KOBU2_PRODUCT_ID, KOBU2_SET2_PRODUCT_ID, TransportError, VIAL_PACKET_SIZE } from '../transport/types';
 import type { WebHidTransport } from '../transport/webhid';
 import {
   buildGetKeyboardDef,
@@ -60,7 +60,8 @@ export interface KeyboardLayoutDef {
  * "0x425A") — same VID and Vial UID as v1, different PID.
  */
 export function isKobu2Definition(def: Pick<KeyboardLayoutDef, 'productId'>): boolean {
-  return Number.parseInt(def.productId ?? '', 16) === KOBU2_PRODUCT_ID;
+  const pid = Number.parseInt(def.productId ?? '', 16);
+  return pid === KOBU2_PRODUCT_ID || pid === KOBU2_SET2_PRODUCT_ID;
 }
 
 export interface HandshakeResult {
