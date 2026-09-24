@@ -137,18 +137,15 @@ keymap = [
     # Backspace fork on H only), NOT a copy of this layer; the user runs the
     # Mac arrangement on Arch and only wanted the readline Ctrl+H.
     #
-    # Thumb overrides (2026-09-25): aligned to the shifted Mac base —
-    #   LEFT  (外側 → 直下): LGui/Alt, Ctrl, Ctrl, (BS fallthrough)
-    #   RIGHT (直下 → 外側): BS, Esc/Win, (Space/Enter fallthrough)
-    # Outer-left tap=LGui / hold=Alt (was transparent→plain LGui; Alt used to
-    # live on the old BS/Alt Ctrl slot). The old LT(5, LGui) Emacs thumb is
-    # gone (both mid thumbs are plain Ctrl). Esc/Win moved one slot outward
-    # onto the physical Esc key (was wrongly on 直下 BS after the thumb shift).
+    # Thumb overrides (2026-09-25, revised same day): only the outer-left
+    # LGui/Alt differs from Mac; Ctrl / 英数 / Esc fall through to layer 0
+    # (Mac Ctrl, 英数/Shift, Esc/Alt). Right 直下 stays plain Backspace so the
+    # diagram labels it explicitly; Space/Enter already fall through.
     [
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Semicolon, LCtrl|LShift, FH)"],
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Slash, LCtrl|LAlt, FH)"],
-        ["_", "MT(LGui, LAlt, FH)", "LCtrl", "LCtrl", "_", "Backspace", "MT(Escape, LGui, FH)", "_", "_", "_"],
+        ["_", "MT(LGui, LAlt, FH)", "_", "_", "_", "Backspace", "_", "_", "_", "_"],
     ],
     # Layer 2 — numbers / symbols (ZMK layer2)
     [
