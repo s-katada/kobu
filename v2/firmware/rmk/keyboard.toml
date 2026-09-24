@@ -137,14 +137,13 @@ keymap = [
     # Backspace fork on H only), NOT a copy of this layer; the user runs the
     # Mac arrangement on Arch and only wanted the readline Ctrl+H.
     #
-    # Thumb overrides (2026-09-25, revised same day): only the outer-left
-    # LGui/Alt differs from Mac; everything else on the thumb row falls
-    # through to layer 0 (Mac Ctrl, 英数/Shift, BS, Esc/Alt, Space, Enter).
+    # Thumb overrides (2026-09-25, revised): outer-left LGui/Alt, and right
+    # Esc tap / Win hold (Mac Esc/Alt slot). Remaining thumbs fall through.
     [
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Semicolon, LCtrl|LShift, FH)"],
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Slash, LCtrl|LAlt, FH)"],
-        ["_", "MT(LGui, LAlt, FH)", "_", "_", "_", "_", "_", "_", "_", "_"],
+        ["_", "MT(LGui, LAlt, FH)", "_", "_", "_", "_", "MT(Escape, LGui, FH)", "_", "_", "_"],
     ],
     # Layer 2 — numbers / symbols (ZMK layer2)
     [

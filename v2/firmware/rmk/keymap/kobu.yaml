@@ -27,7 +27,7 @@ layers:
     - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
        {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: '/', h: Ctrl+Alt, s: '?'}]
     - [{t: ▽, type: trans}, {t: LGui, h: Alt}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
-       {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
+       {t: ▽, type: trans}, {t: Esc, h: Win}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
   Linux:
     - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
        {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
