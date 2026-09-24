@@ -128,21 +128,27 @@ keymap = [
         # (Language2 = 英数 = English input on macOS JIS), hold = LShift — per
         # the user's request to make this thumb Shift / English (was Language1
         # = かな).
-        # NOTE: the momentary thumb overrides on layers 1/2/3 (英数↔かな pair,
-        # Win/Linux modifiers) still sit at their old columns and so no longer
-        # line up with these shifted base-layer thumbs — shift them too if that
-        # cross-layer alignment is wanted.
+        # NOTE: layer-2 language thumb (かな) still sits on the 英数 column and
+        # lines up; Win thumbs were realigned 2026-09-25 to the shifted base.
         ["MissionControl", "LGui", "LCtrl", "MT(Language2, LShift, FH)", "Backspace", "Backspace", "MT(Escape, LAlt, FH)", "LT(2, Space, LTP)", "LT(3, Enter, LTP)", "RShift"],
     ],
     # Layer 1 — Win overlay (ZMK layer1). Was "Win/Linux" until 2026-08-26:
     # Linux got its own layer 7 — a MINIMAL overlay (Mac base + the Ctrl+H →
     # Backspace fork on H only), NOT a copy of this layer; the user runs the
     # Mac arrangement on Arch and only wanted the readline Ctrl+H.
+    #
+    # Thumb overrides (2026-09-25): aligned to the shifted Mac base —
+    #   LEFT  (外側 → 直下): LGui/Alt, Ctrl, Ctrl, (BS fallthrough)
+    #   RIGHT (直下 → 外側): BS, Esc/Win, (Space/Enter fallthrough)
+    # Outer-left tap=LGui / hold=Alt (was transparent→plain LGui; Alt used to
+    # live on the old BS/Alt Ctrl slot). The old LT(5, LGui) Emacs thumb is
+    # gone (both mid thumbs are plain Ctrl). Esc/Win moved one slot outward
+    # onto the physical Esc key (was wrongly on 直下 BS after the thumb shift).
     [
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "_"],
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Semicolon, LCtrl|LShift, FH)"],
         ["_", "_", "_", "_", "_", "_", "_", "_", "_", "MT(Slash, LCtrl|LAlt, FH)"],
-        ["_", "_", "MT(Backspace, LAlt, FH)", "LT(5, LGui, LTP)", "_", "MT(Escape, LGui, FH)", "_", "_", "_", "_"],
+        ["_", "MT(LGui, LAlt, FH)", "LCtrl", "LCtrl", "_", "Backspace", "MT(Escape, LGui, FH)", "_", "_", "_"],
     ],
     # Layer 2 — numbers / symbols (ZMK layer2)
     [

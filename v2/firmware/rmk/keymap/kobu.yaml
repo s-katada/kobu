@@ -26,8 +26,8 @@ layers:
        {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ':', h: Ctrl+Shift, s: ';'}]
     - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
        {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: '/', h: Ctrl+Alt, s: '?'}]
-    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: BS, h: Alt}, {t: LGui, h: Emacs}, {t: ▽, type: trans},
-       {t: Esc, h: Win}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
+    - [{t: ▽, type: trans}, {t: LGui, h: Alt}, Ctrl, Ctrl, {t: ▽, type: trans},
+       BS, {t: Esc, h: Win}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
   Linux:
     - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
        {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
@@ -62,7 +62,7 @@ layers:
     - [Ctl+Q, Ctl+W, End, Ctl+R, Ctl+T, Ctl+Y, Ctl+U, Ctl+I, Ctl+O, ↑]
     - [{t: Home, s: 2tap Ctl+A}, Ctl+S, Del, →, Ctl+G, BS, Ctl+J, {t: Ctl+K, s: 行削除}, Ctl+L, 'Ctl+;']
     - [Ctl+Z, Ctl+X, Ctl+C, Ctl+V, ←, ↓, Ctl+M, 'Ctl+,', 'Ctl+.', "Ctl+'"]
-    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {type: held}, {t: ▽, type: trans},
+    - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
        {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}]
   Neovim:
     - [{t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans}, {t: ▽, type: trans},
