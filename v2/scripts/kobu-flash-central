@@ -9,6 +9,7 @@
 #   ./kobu-flash-central --plain      # build + flash normal only (no clear)
 #   ./kobu-flash-central --build-only # UF2s only, do not flash
 #   ./kobu-flash-central --flash-only # flash existing UF2s, do not rebuild
+#   ./kobu-flash-central --wait       # wait up to 4 min for USB before flashing
 #   ./kobu-flash-central --set-2      # --features set-2 (squid / 0x425B)
 #
 # ⚠ LEFT half on a DATA USB cable. Run inside the firmware devshell
@@ -19,11 +20,13 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 RMK="$ROOT/firmware/rmk"
 FLASH="$HERE/kobu-flash"
+JUMP="$HERE/kobu-bootloader"
 ELF_DIR=target/thumbv7em-none-eabihf/release
 
 PLAIN=0
 BUILD_ONLY=0
 FLASH_ONLY=0
+WAIT_USB=0
 FEATURES=""
 UF2_SUFFIX=""
 
@@ -37,6 +40,7 @@ while (($#)); do
         --plain) PLAIN=1 ;;
         --build-only) BUILD_ONLY=1 ;;
         --flash-only) FLASH_ONLY=1 ;;
+        --wait) WAIT_USB=1 ;;
         --set-2)
             FEATURES="--features set-2"
             UF2_SUFFIX="-set2"
@@ -81,6 +85,13 @@ trap restore_clear_layout EXIT
 
 build_normal() {
     echo "=== build central (normal) ==="
+    # Throwaway build applies in-place registry patches (build.rs), then rebuild
+    # the patched crates from those sources — same ritual as CI build-rmk-v2.
+    # Without the clean, cargo can compile stale rmk/trouble-host against the
+    # pre-patch registry bytes and silently ship the wrong PPCP / conn params.
+    # shellcheck disable=SC2086
+    cargo build --release --bin central $FEATURES || true
+    cargo clean --release -p rmk -p trouble-host -p rmk-macro
     # shellcheck disable=SC2086
     cargo build --release --bin central $FEATURES
     kobu-uf2conv "$ELF_DIR/central" "$NORMAL_UF2"
@@ -117,6 +128,38 @@ fi
 if (( BUILD_ONLY )); then
     echo "=== build-only: skip flash ==="
     exit 0
+fi
+
+wait_for_usb() {
+    [[ -x "$JUMP" ]] || {
+        echo "kobu-flash-central: build kobu-bootloader first (needed for --wait)" >&2
+        exit 1
+    }
+    local deadline=$((SECONDS + 240))
+    echo "=== waiting for USB kobu2 central (up to 240s) ==="
+    while (( SECONDS < deadline )); do
+        if "$JUMP" --list 2>/dev/null | grep -q '^USB'; then
+            echo "  USB ready:"
+            "$JUMP" --list 2>/dev/null | sed 's/^/    /' || true
+            return 0
+        fi
+        # Already in bootloader counts as ready for kobu-flash.
+        local v
+        for v in /Volumes/*; do
+            if [[ -f "$v/INFO_UF2.TXT" ]]; then
+                echo "  bootloader volume: $v"
+                return 0
+            fi
+        done
+        sleep 2
+    done
+    echo "kobu-flash-central: timed out waiting for USB. Plug the LEFT half" >&2
+    echo "            with a data cable (BLE-only sessions cannot flash)." >&2
+    return 1
+}
+
+if (( WAIT_USB )); then
+    wait_for_usb
 fi
 
 if (( PLAIN )); then

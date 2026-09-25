@@ -76,6 +76,9 @@ v2/scripts/kobu-flash-central
 
 # キーマップ以外の変更だけなら clearlayout なし
 v2/scripts/kobu-flash-central --plain
+
+# BLE のみのときに USB を挿すまで待ってから焼く
+v2/scripts/kobu-flash-central --plain --wait
 ```
 
 UF2 だけ渡す低レベル版は [`scripts/kobu-flash`](scripts/kobu-flash) です。
