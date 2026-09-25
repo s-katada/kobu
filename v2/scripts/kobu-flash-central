@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# kobu-flash-central — build + flash the USB-connected kobu2 central.
+#
+# Default (keymap-safe): build normal + clear_layout UF2s, then flash
+# clearlayout → normal via kobu-flash. Stored keymap is rewritten from
+# keyboard.toml; BLE bonds are kept.
+#
+#   ./kobu-flash-central              # build + clearlayout ritual + flash
+#   ./kobu-flash-central --plain      # build + flash normal only (no clear)
+#   ./kobu-flash-central --build-only # UF2s only, do not flash
+#   ./kobu-flash-central --flash-only # flash existing UF2s, do not rebuild
+#   ./kobu-flash-central --set-2      # --features set-2 (squid / 0x425B)
+#
+# ⚠ LEFT half on a DATA USB cable. Run inside the firmware devshell
+#   (`nix develop .#firmware` or direnv in firmware/rmk).
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/.." && pwd)"
+RMK="$ROOT/firmware/rmk"
+FLASH="$HERE/kobu-flash"
+ELF_DIR=target/thumbv7em-none-eabihf/release
+
+PLAIN=0
+BUILD_ONLY=0
+FLASH_ONLY=0
+FEATURES=""
+UF2_SUFFIX=""
+
+usage() {
+    sed -n '2,/^set -euo pipefail$/p' "$0" | sed '$d; s/^# \{0,1\}//'
+    exit 2
+}
+
+while (($#)); do
+    case "$1" in
+        --plain) PLAIN=1 ;;
+        --build-only) BUILD_ONLY=1 ;;
+        --flash-only) FLASH_ONLY=1 ;;
+        --set-2)
+            FEATURES="--features set-2"
+            UF2_SUFFIX="-set2"
+            ;;
+        -h|--help) usage ;;
+        *)
+            echo "kobu-flash-central: unknown option: $1" >&2
+            usage
+            ;;
+    esac
+    shift
+done
+
+if (( BUILD_ONLY && FLASH_ONLY )); then
+    echo "kobu-flash-central: --build-only and --flash-only are mutually exclusive" >&2
+    exit 2
+fi
+
+command -v cargo >/dev/null 2>&1 || {
+    echo "kobu-flash-central: cargo not found — run inside the firmware devshell" >&2
+    exit 1
+}
+command -v kobu-uf2conv >/dev/null 2>&1 || {
+    echo "kobu-flash-central: kobu-uf2conv not found — run inside the firmware devshell" >&2
+    exit 1
+}
+[[ -x "$FLASH" ]] || { echo "kobu-flash-central: missing $FLASH" >&2; exit 1; }
+
+NORMAL_UF2="kobu2-rmk-central${UF2_SUFFIX}.uf2"
+CLEAR_UF2="kobu2-rmk-central${UF2_SUFFIX}-clearlayout.uf2"
+
+cd "$RMK"
+
+restore_clear_layout() {
+    if grep -q '^clear_layout = true$' keyboard.toml 2>/dev/null; then
+        sed -i.bak 's/^clear_layout = true$/clear_layout = false/' keyboard.toml
+        rm -f keyboard.toml.bak
+        echo "kobu-flash-central: restored clear_layout = false" >&2
+    fi
+}
+trap restore_clear_layout EXIT
+
+build_normal() {
+    echo "=== build central (normal) ==="
+    # shellcheck disable=SC2086
+    cargo build --release --bin central $FEATURES
+    kobu-uf2conv "$ELF_DIR/central" "$NORMAL_UF2"
+    ls -la "$NORMAL_UF2"
+}
+
+build_clearlayout() {
+    echo "=== build central (clear_layout) ==="
+    sed -i.bak 's/^clear_layout = false$/clear_layout = true/' keyboard.toml
+    rm -f keyboard.toml.bak
+    grep -q '^clear_layout = true$' keyboard.toml
+    touch src/central.rs
+    # shellcheck disable=SC2086
+    cargo build --release --bin central $FEATURES
+    kobu-uf2conv "$ELF_DIR/central" "$CLEAR_UF2"
+    sed -i.bak 's/^clear_layout = true$/clear_layout = false/' keyboard.toml
+    rm -f keyboard.toml.bak
+    grep -q '^clear_layout = false$' keyboard.toml
+    touch src/central.rs
+    ls -la "$CLEAR_UF2"
+    if cmp -s "$NORMAL_UF2" "$CLEAR_UF2"; then
+        echo "kobu-flash-central: ERROR: normal and clearlayout UF2s are identical" >&2
+        exit 1
+    fi
+}
+
+if (( ! FLASH_ONLY )); then
+    build_normal
+    if (( ! PLAIN )); then
+        build_clearlayout
+    fi
+fi
+
+if (( BUILD_ONLY )); then
+    echo "=== build-only: skip flash ==="
+    exit 0
+fi
+
+if (( PLAIN )); then
+    [[ -f "$NORMAL_UF2" ]] || { echo "kobu-flash-central: missing $NORMAL_UF2" >&2; exit 1; }
+    echo "=== flash $NORMAL_UF2 ==="
+    "$FLASH" "$NORMAL_UF2"
+else
+    [[ -f "$CLEAR_UF2" ]] || { echo "kobu-flash-central: missing $CLEAR_UF2" >&2; exit 1; }
+    [[ -f "$NORMAL_UF2" ]] || { echo "kobu-flash-central: missing $NORMAL_UF2" >&2; exit 1; }
+    echo "=== flash clearlayout → normal ==="
+    "$FLASH" "$CLEAR_UF2" "$NORMAL_UF2"
+fi
+
+echo "=== done ==="

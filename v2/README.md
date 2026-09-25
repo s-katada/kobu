@@ -66,6 +66,20 @@ kobu-uf2conv target/thumbv7em-none-eabihf/release/central    kobu2-rmk-central.u
 kobu-uf2conv target/thumbv7em-none-eabihf/release/peripheral kobu2-rmk-peripheral.uf2
 ```
 
+### USB で central に焼く（キーマップ反映）
+
+左手をデータ対応 USB で繋いだ状態で、firmware devshell から:
+
+```sh
+# clearlayout → 通常（保存キーマップを keyboard.toml で書き直し。BLE ボンドは残る）
+v2/scripts/kobu-flash-central
+
+# キーマップ以外の変更だけなら clearlayout なし
+v2/scripts/kobu-flash-central --plain
+```
+
+UF2 だけ渡す低レベル版は [`scripts/kobu-flash`](scripts/kobu-flash) です。
+
 ## 2 台の kobu2 を同時に使う（セット識別）
 
 クラシック構成はデフォルトで **set 1**（split 広告トークン `0x41`、Mac 上の名前 `kobu2 octopus`、PID `0x425A`）です。2 台目は **同じ左右ペアごと**に `--features set-2` でビルドした UF2 を焼きます（トークン `0x42`、名前 `kobu2 squid`、PID `0x425B`）。トークンが違うと左右の初回ペアリングが相手セットに掴まれません。Mac 上も別名になるのでプロファイルを取り違えにくくなります。
